@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap');
+
+:root {
+  --bg: #0c0f14;
+  --card: rgba(23, 27, 35, 0.92);
+  --text: #f8f6f2;
+  --muted: #cfd3dc;
+  --accent: #e7c07b;
+  --stroke: rgba(255,255,255,0.06);
+  --glass: rgba(255, 255, 255, 0.02);
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--bg);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(120% 120% at 10% 10%, rgba(231,192,123,0.18), transparent),
+    radial-gradient(110% 110% at 90% 0%, rgba(90,112,255,0.12), transparent),
+    linear-gradient(160deg, #0c0f14 0%, #0f141d 40%, #0c0f14 100%);
+}
+
+a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+button {
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  padding: 0.65em 1.4em;
+  font-size: 0.95em;
+  font-weight: 600;
+  font-family: inherit;
+  background: linear-gradient(135deg, var(--accent), #b18b4d);
+  color: #0c0f14;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+}
+
+input, select, textarea {
+  font-family: inherit;
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(216,178,110,0.25);
+}
+
+h1, h2, h3, h4 {
+  font-family: 'Playfair Display', serif;
+  letter-spacing: 0.4px;
+  margin: 0;
+  color: var(--text);
+}
+
+p {
+  color: var(--muted);
+}
