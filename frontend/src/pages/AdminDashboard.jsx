@@ -12,7 +12,7 @@ function AdminDashboard() {
 
   const fetchPending = async () => {
     if (!token) {
-      navigate("/admin-login");
+      navigate("/admin-login", { replace: true });
       return;
     }
     try {
@@ -25,7 +25,7 @@ function AdminDashboard() {
       setError(err.response?.data?.message || "Failed to load pending hotels");
       if (err.response?.status === 401 || err.response?.status === 403) {
         localStorage.removeItem("adminToken");
-        navigate("/admin-login");
+        navigate("/admin-login", { replace: true });
       }
     } finally {
       setLoading(false);
@@ -61,7 +61,7 @@ function AdminDashboard() {
 
   const logout = () => {
     localStorage.removeItem("adminToken");
-    navigate("/admin-login");
+    navigate("/admin-login", { replace: true });
   };
 
   return (

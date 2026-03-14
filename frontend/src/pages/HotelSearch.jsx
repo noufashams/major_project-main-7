@@ -112,9 +112,15 @@ function HotelSearch() {
   return (
     <div style={{
       minHeight: "100vh",
-      backgroundImage: "linear-gradient(135deg, rgba(9,12,22,0.82), rgba(17,24,39,0.72)), url('https://images.unsplash.com/photo-1501117716987-41700207dee6?auto=format&fit=crop&w=2000&q=80&sat=-8')",
-      backgroundSize: "cover",
-      backgroundPosition: "center",
+      backgroundColor: "#0c111d",
+      backgroundImage: [
+        "linear-gradient(125deg, rgba(0,0,0,0.58), rgba(0,0,0,0.78))",
+        "url('/assets/hero-bg.jpg')"
+      ].join(', '),
+      backgroundSize: "cover, cover",
+      backgroundPosition: "center center, center center",
+      backgroundRepeat: "no-repeat",
+      backgroundBlendMode: "overlay, normal",
       color: "#f8fafc",
       padding: "48px 20px"
     }}>
@@ -126,16 +132,17 @@ function HotelSearch() {
         </div>
 
         <div style={{
-          background: "rgba(255,255,255,0.08)",
-          border: "1px solid rgba(255,255,255,0.18)",
+          background: "rgba(0,0,0,0.38)",
+          border: "1px solid rgba(255,255,255,0.16)",
           borderRadius: "18px",
           padding: "16px",
           display: "flex",
           gap: "10px",
           flexWrap: "wrap",
           alignItems: "center",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.35)",
-          backdropFilter: "blur(12px)"
+          boxShadow: "0 24px 60px rgba(0,0,0,0.55)",
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)"
         }}>
           <input
             placeholder="Search by city or hotel"
@@ -146,8 +153,8 @@ function HotelSearch() {
               padding: "12px 14px",
               flex: "1 1 260px",
               borderRadius: "12px",
-              border: "1px solid rgba(255,255,255,0.22)",
-              background: "rgba(255,255,255,0.10)",
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(0,0,0,0.35)",
               color: "#f8fafc"
             }}
           />
@@ -159,8 +166,8 @@ function HotelSearch() {
               padding: "12px 14px",
               minWidth: "200px",
               borderRadius: "12px",
-              border: "1px solid rgba(255,255,255,0.22)",
-              background: "rgba(255,255,255,0.10)",
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(0,0,0,0.35)",
               color: "#f8fafc"
             }}
           >
@@ -185,8 +192,8 @@ function HotelSearch() {
           </button>
         </div>
 
-        <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: "13px", color: "#cbd5e1" }}>Quick filters:</span>
+          <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "13px", color: "#e2e8f0" }}>Quick filters:</span>
           <button
             onClick={() => toggleFilter("fourPlus")}
             style={pill(filters.fourPlus)}
@@ -207,8 +214,8 @@ function HotelSearch() {
               style={{
                 padding: "8px 10px",
                 borderRadius: "10px",
-                border: "1px solid rgba(255,255,255,0.18)",
-                background: "rgba(255,255,255,0.08)",
+                border: "1px solid rgba(255,255,255,0.16)",
+                background: "rgba(0,0,0,0.32)",
                 color: "#f8fafc"
               }}
             >
@@ -239,14 +246,14 @@ function HotelSearch() {
             <div style={{ display: "grid", gap: "12px" }}>
               {[1,2,3].map(i => (
                 <div key={i} style={{
-                  background: "rgba(255,255,255,0.08)",
-                  border: "1px solid rgba(255,255,255,0.14)",
+                  background: "rgba(0,0,0,0.32)",
+                  border: "1px solid rgba(255,255,255,0.20)",
                   borderRadius: "16px",
                   padding: "14px",
                   display: "grid",
                   gridTemplateColumns: "110px 1fr",
                   gap: "14px",
-                  backdropFilter: "blur(8px)"
+                  backdropFilter: "blur(16px)"
                 }}>
                   <div style={{ width: "110px", height: "110px", borderRadius: "12px", background: "rgba(255,255,255,0.12)" }} />
                   <div>
@@ -261,13 +268,13 @@ function HotelSearch() {
 
           {!loadingSearch && sortedFilteredHotels.length === 0 && (
             <div style={{
-              background: "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(0,0,0,0.32)",
+              border: "1px solid rgba(255,255,255,0.20)",
               borderRadius: "16px",
               padding: "18px",
               textAlign: "center",
               color: "#cbd5e1",
-              backdropFilter: "blur(8px)"
+              backdropFilter: "blur(16px)"
             }}>
               <p style={{ margin: 0, fontWeight: 600 }}>No hotels match your filters.</p>
               <p style={{ margin: "6px 0 0" }}>Try clearing filters or searching another city.</p>
@@ -281,16 +288,17 @@ function HotelSearch() {
             <div
               key={hotel.hotel_id}
               style={{
-                background: "rgba(255,255,255,0.08)",
-                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(0,0,0,0.32)",
+                border: "1px solid rgba(255,255,255,0.20)",
                 borderRadius: "16px",
                 padding: "14px",
                 display: "grid",
                 gridTemplateColumns: "110px 1fr",
                 gap: "14px",
                 cursor: "pointer",
-                boxShadow: "0 16px 40px rgba(0,0,0,0.32)",
-                backdropFilter: "blur(10px)"
+                boxShadow: "0 18px 46px rgba(0,0,0,0.40)",
+                backdropFilter: "blur(18px)",
+                WebkitBackdropFilter: "blur(18px)"
               }}
               onClick={() => navigate(`/hotel/${hotel.slug}`)}
             >

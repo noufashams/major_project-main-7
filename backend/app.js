@@ -442,7 +442,7 @@ app.get("/api/hotels/search", async (req, res) => {
 
     if (location) {
       params.push(location);
-      conditions.push(`location = $${params.length}`);
+      conditions.push(`LOWER(TRIM(location)) = LOWER(TRIM($${params.length}))`);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -476,7 +476,11 @@ app.get("/api/hotels/search", async (req, res) => {
 app.get("/api/hotels/locations", async (_req, res) => {
   try {
     const result = await db.query(
-      "SELECT DISTINCT location FROM hotels ORDER BY location"
+      `SELECT DISTINCT ON (LOWER(TRIM(location))) 
+              TRIM(location) AS location,
+              LOWER(TRIM(location)) AS normalized_location
+       FROM hotels
+       ORDER BY LOWER(TRIM(location)), TRIM(location)`
     );
     res.json({ locations: result.rows.map(r => r.location) });
   } catch (err) {
