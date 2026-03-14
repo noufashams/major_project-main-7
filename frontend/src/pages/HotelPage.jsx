@@ -212,6 +212,11 @@ const processRealBooking = async () => {
       form.append("adults", bookingDetails.adults);
       form.append("children", bookingDetails.children);
       form.append("pay_on_arrival", bookingDetails.payOnArrival ? "true" : "false");
+      // Tag source & device for analytics
+      form.append("booking_source", "web");
+      const ua = navigator.userAgent || "";
+      const isMobile = /Mobi|Android/i.test(ua);
+      form.append("device", isMobile ? "mobile" : "desktop");
       if (licenseFile) form.append("license_file", licenseFile);
 
       const res = await axios.post("http://localhost:3000/api/bookings", form, {

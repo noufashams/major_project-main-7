@@ -269,7 +269,7 @@ export async function getPricingRecommendations(db, hotelId, daysAhead = 7) {
 
 export async function applyRecommendedPrice(db, hotelId, roomId, targetDate, newPrice) {
   try {
-    // We use an UPSERT. If a price override already exists for this room/date, update it.
+    // We use an UPSERT for date-specific override
     const result = await db.query(
       `INSERT INTO room_price_overrides (hotel_id, room_id, target_date, custom_price)
        VALUES ($1, $2, $3, $4)
@@ -277,6 +277,12 @@ export async function applyRecommendedPrice(db, hotelId, roomId, targetDate, new
        DO UPDATE SET custom_price = EXCLUDED.custom_price, created_at = CURRENT_TIMESTAMP
        RETURNING override_id, room_id, target_date, custom_price`,
       [hotelId, roomId, targetDate, newPrice]
+    );
+
+    // Also update the base price so default views reflect the change immediately
+    await db.query(
+      `UPDATE rooms SET price_per_night = $1 WHERE hotel_id = $2 AND room_id = $3`,
+      [newPrice, hotelId, roomId]
     );
 
     console.log(

@@ -5,7 +5,7 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { 
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, 
-  Tooltip, ResponsiveContainer 
+  Tooltip, ResponsiveContainer, PieChart, Pie, Cell, ComposedChart, Legend
 } from 'recharts';
 // 🚨 NEW FRONTEND IMPORTS
 import { io } from "socket.io-client";
@@ -16,6 +16,11 @@ function StaffDashboard() {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState("analytics"); // 'analytics' or 'pricing'
   const [loading, setLoading] = useState(true);
+  const [trendChartType, setTrendChartType] = useState("line"); // line | bar
+  const [roomChartType, setRoomChartType] = useState("bar"); // bar | pie
+  const [leadChartType, setLeadChartType] = useState("bar"); // bar | pie
+  const [payChartType, setPayChartType] = useState("stack"); // stack | pie
+  const [sourceChartType, setSourceChartType] = useState("pie"); // pie | stack
   
   // Analytics State
   const [analytics, setAnalytics] = useState(null);
@@ -145,28 +150,70 @@ useEffect(() => {
   // --- CHART DATA PREP ---
   const revenueTrendData = useMemo(() => {
     if (!analytics?.revenue_trend) return [];
-    const revenueMap = {};
+    const revMap = {};
+    const occMap = {};
     analytics.revenue_trend.forEach(item => {
-      const cleanDate = item.date.trim().replace(/\s+/g, ' '); 
-      revenueMap[cleanDate] = Number(item.daily_revenue);
+      const cleanDate = item.date.trim().replace(/\s+/g, ' ');
+      revMap[cleanDate] = Number(item.daily_revenue);
+      occMap[cleanDate] = Number(item.occupancy_pct);
     });
     const filledData = [];
-    const days = parseInt(period) > 30 ? 30 : parseInt(period) || 30; 
+    const days = parseInt(period) > 30 ? 30 : parseInt(period) || 30;
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const month = d.toLocaleString('en-US', { month: 'short' });
       const day = d.getDate().toString().padStart(2, '0');
       const dateStr = `${month} ${day}`;
-      filledData.push({ date: dateStr, daily_revenue: revenueMap[dateStr] || 0 });
+      filledData.push({ 
+        date: dateStr, 
+        daily_revenue: revMap[dateStr] || 0,
+        occupancy_pct: occMap[dateStr] || 0
+      });
     }
     return filledData;
   }, [analytics?.revenue_trend, period]);
 
+  const paymentMix = useMemo(() => {
+    const mix = analytics?.key_metrics?.payment_mix || {};
+    const paid = mix.paid || 0;
+    const pending = mix.pending || 0;
+    const total = paid + pending || 1;
+    return {
+      paid,
+      pending,
+      paidPct: ((paid / total) * 100).toFixed(1),
+      pendingPct: ((pending / total) * 100).toFixed(1)
+    };
+  }, [analytics?.key_metrics?.payment_mix]);
+
 // Fix: Only show full-screen loading if we don't have analytics data yet!
   const hotelTitle = analytics?.hotel?.hotel_name || bookings[0]?.hotel_name || "Hotel";
+  const paymentDailyData = useMemo(() => analytics?.payment_daily || [], [analytics?.payment_daily]);
+  const cancellationsByPay = useMemo(() => {
+    const raw = analytics?.cancellations_by_payment || [];
+    const base = [
+      { payment_status: "paid", cancels: 0 },
+      { payment_status: "pending", cancels: 0 }
+    ];
+    if (raw.length === 0) return base;
+    const map = Object.fromEntries(base.map(b => [b.payment_status, b.cancels]));
+    raw.forEach(r => { map[r.payment_status || "unknown"] = r.cancels || 0; });
+    return Object.entries(map).map(([payment_status, cancels]) => ({ payment_status, cancels }));
+  }, [analytics?.cancellations_by_payment]);
+  const sourceMix = useMemo(() => analytics?.source_mix || [], [analytics?.source_mix]);
+  const sourceTrend = useMemo(() => analytics?.source_trend || [], [analytics?.source_trend]);
+  const hasCancelData = useMemo(
+    () => (cancellationsByPay || []).length > 0,
+    [cancellationsByPay]
+  );
+  const maxCancels = useMemo(
+    () => Math.max(...(cancellationsByPay || []).map(c => c.cancels || 0), 0),
+    [cancellationsByPay]
+  );
 
   if (loading && !analytics && activeTab === "analytics") return <div style={{ padding: "40px" }}>Loading Dashboard...</div>;
+  if (!loading && !analytics && activeTab === "analytics") return <div style={{ padding: "40px", color: "#e5e7eb" }}>Unable to load analytics right now.</div>;
 
   return (
     <div style={{ 
@@ -212,6 +259,13 @@ useEffect(() => {
             ⚡ AI Pricing
           </button>
           
+          <button 
+            onClick={() => navigate("/bookings")} 
+            style={{...defaultNavStyle, backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.12)"}}
+          >
+            📓 Bookings
+          </button>
+
           <button 
             onClick={() => navigate("/rooms")} 
             style={{...defaultNavStyle, backgroundColor: "#10b981", color: "white", borderColor: "#10b981"}}
@@ -300,20 +354,130 @@ useEffect(() => {
                 <div style={metricValueStyle}>{analytics.summary.available_rooms ?? "—"}</div>
                 <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>Remaining inventory right now</div>
               </div>
+
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>💳 Payment Mix</div>
+                <div style={metricValueStyle}>{paymentMix.paidPct}% Paid</div>
+                <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>
+                  {paymentMix.paid} paid • {paymentMix.pending} pending ({paymentMix.pendingPct}%)
+                </div>
+                {analytics?.alerts?.unpaid_arrivals_next3 > 0 && (
+                  <div style={{ marginTop: "8px", fontSize: "12px", color: "#facc15", fontWeight: 700 }}>
+                    ⚠ {analytics.alerts.unpaid_arrivals_next3} unpaid arrivals in next 3 days
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* CHARTS SECTION */}
-            <div style={{ ...cardStyle, height: "400px", marginBottom: "20px" }}>
-              <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue Trend ({period} Days)</h3>
+            <div style={{ ...cardStyle, height: "420px", marginBottom: "20px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue & Occupancy ({period} Days)</h3>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button onClick={() => setTrendChartType("line")} style={{ padding: "6px 10px", borderRadius: "8px", border: trendChartType === "line" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: trendChartType === "line" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Line</button>
+                  <button onClick={() => setTrendChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: trendChartType === "bar" ? "1px solid #60a5fa" : "1px solid rgba(255,255,255,0.12)", background: trendChartType === "bar" ? "rgba(96,165,250,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={revenueTrendData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" tick={{fontSize: 12}} tickMargin={10} />
-                  <YAxis tickFormatter={(val) => `₹${val}`} tick={{fontSize: 12}} />
-                  <Tooltip formatter={(value) => `₹${value}`} />
-                  <Line type="monotone" dataKey="daily_revenue" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 8 }} />
-                </LineChart>
+                {trendChartType === "line" ? (
+                  <LineChart data={revenueTrendData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" tick={{fontSize: 12}} tickMargin={10} />
+                    <YAxis yAxisId="left" tickFormatter={(val) => `₹${val}`} tick={{fontSize: 12}} />
+                    <YAxis yAxisId="right" orientation="right" tickFormatter={(val) => `${val}%`} tick={{fontSize: 12}} />
+                    <Tooltip />
+                    <Legend />
+                    <Line yAxisId="left" type="monotone" dataKey="daily_revenue" name="Revenue" stroke="#10b981" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                    <Line yAxisId="right" type="monotone" dataKey="occupancy_pct" name="Occupancy %" stroke="#60a5fa" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                  </LineChart>
+                ) : (
+                  <ComposedChart data={revenueTrendData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" tick={{fontSize: 12}} tickMargin={10} />
+                    <YAxis yAxisId="left" tickFormatter={(val) => `₹${val}`} tick={{fontSize: 12}} />
+                    <YAxis yAxisId="right" orientation="right" tickFormatter={(val) => `${val}%`} tick={{fontSize: 12}} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="daily_revenue" name="Revenue" fill="#10b981" radius={[4,4,0,0]} />
+                    <Line yAxisId="right" type="monotone" dataKey="occupancy_pct" name="Occupancy %" stroke="#60a5fa" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                  </ComposedChart>
+                )}
               </ResponsiveContainer>
+            </div>
+
+            <div style={{ ...cardStyle, height: "360px", marginBottom: "20px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Payment Stack (Paid vs Pending)</h3>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button onClick={() => setPayChartType("stack")} style={{ padding: "6px 10px", borderRadius: "8px", border: payChartType === "stack" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: payChartType === "stack" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Stacked</button>
+                  <button onClick={() => setPayChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: payChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: payChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height="100%">
+                {payChartType === "stack" ? (
+                  <ComposedChart data={paymentDailyData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" tick={{fontSize: 12}} tickMargin={10} />
+                    <YAxis tick={{fontSize: 12}} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="paid" stackId="pay" name="Paid" fill="#10b981" radius={[4,4,0,0]} />
+                    <Bar dataKey="pending" stackId="pay" name="Pending" fill="#f59e0b" radius={[4,4,0,0]} />
+                  </ComposedChart>
+                ) : (
+                  <PieChart>
+                    <Tooltip />
+                    <Legend />
+                    <Pie data={cancellationsByPay.length ? cancellationsByPay : paymentMix ? [{ payment_status: "paid", cancels: paymentMix.paid }, { payment_status: "pending", cancels: paymentMix.pending }] : []}
+                         dataKey="cancels"
+                         nameKey="payment_status"
+                         cx="50%" cy="50%" outerRadius={100} label>
+                      {(cancellationsByPay.length ? cancellationsByPay : [{payment_status:"paid", cancels: paymentMix.paid},{payment_status:"pending", cancels: paymentMix.pending}]).map((entry, index) => (
+                        <Cell key={`pay-${index}`} fill={["#10b981","#f59e0b","#ef4444","#3b82f6"][index % 4]} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "30px" }}>
+              <div style={{ ...cardStyle, height: "320px", minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Source Mix</h3>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button onClick={() => setSourceChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: sourceChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: sourceChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
+                    <button onClick={() => setSourceChartType("stack")} style={{ padding: "6px 10px", borderRadius: "8px", border: sourceChartType === "stack" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: sourceChartType === "stack" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Stacked</button>
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height="100%">
+                  {sourceChartType === "pie" ? (
+                    <PieChart>
+                      <Tooltip />
+                      <Legend />
+                      <Pie data={sourceMix} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={100} label>
+                        {sourceMix.map((entry, index) => (
+                          <Cell key={`source-${index}`} fill={["#10b981","#3b82f6","#f59e0b","#a78bfa","#ef4444","#14b8a6"][index % 6]} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  ) : (
+                    <ComposedChart data={sourceTrend} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="date" />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="web" stackId="src" fill="#3b82f6" name="Web" />
+                      <Bar dataKey="chat" stackId="src" fill="#10b981" name="Chat" />
+                      <Bar dataKey="phone" stackId="src" fill="#f59e0b" name="Phone" />
+                      <Bar dataKey="ota" stackId="src" fill="#a78bfa" name="OTA" />
+                      <Bar dataKey="other" stackId="src" fill="#94a3b8" name="Other" />
+                    </ComposedChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
+
             </div>
 
             {/* ALERTS & RECOMMENDATIONS */}
@@ -356,94 +520,69 @@ useEffect(() => {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "30px" }}>
-              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column" }}>
-                <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue by Room Type</h3>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analytics.revenue_by_room_type || []}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-                    <XAxis dataKey="room_type" />
-                    <YAxis />
-                    <Tooltip formatter={(value) => `₹${value}`} />
-                    <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column" }}>
-                <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Bookings by Day of Week</h3>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analytics.peak_days || []}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="day_of_week" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="bookings" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* RECENT BOOKINGS WITH ID LINKS */}
-            <div style={{ ...cardStyle, marginTop: "10px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                <h3 style={{ margin: 0, color: "#e5e7eb" }}>Recent Bookings</h3>
-                {bookingsLoading && <span style={{ color: "#6b7280", fontSize: "12px" }}>Loading…</span>}
-              </div>
-              {bookings.length === 0 ? (
-                <p style={{ color: "#9ca3af", margin: 0 }}>No bookings yet.</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        <th style={th}>Ref</th>
-                        <th style={th}>Guest</th>
-                        <th style={th}>Phone</th>
-                        <th style={th}>Room</th>
-                        <th style={th}>Check-In</th>
-                        <th style={th}>Check-Out</th>
-                        <th style={th}>Status</th>
-                        <th style={th}>Payment</th>
-                        <th style={th}>ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bookings.map((b) => (
-                        <tr key={b.booking_id}>
-                          <td style={td}>{b.booking_ref || b.booking_id}</td>
-                          <td style={td}>{b.guest_name}</td>
-                          <td style={td}>{b.guest_phone}</td>
-                          <td style={td}>{b.room_type}</td>
-                          <td style={td}>{new Date(b.check_in_date).toLocaleDateString()}</td>
-                          <td style={td}>{new Date(b.check_out_date).toLocaleDateString()}</td>
-                          <td style={td}>{b.booking_status}</td>
-                          <td style={td}>
-                            <span style={{
-                              display: "inline-block",
-                              padding: "4px 10px",
-                              borderRadius: "999px",
-                              fontWeight: 700,
-                              fontSize: "12px",
-                              color: (b.payment_status || "pending").toLowerCase() === "paid" ? "#166534" : "#854d0e",
-                              backgroundColor: (b.payment_status || "pending").toLowerCase() === "paid" ? "rgba(22,101,52,0.12)" : "rgba(133,77,14,0.14)"
-                            }}>
-                              {(b.payment_status || "pending").toUpperCase()}
-                            </span>
-                          </td>
-                          <td style={td}>
-                            {b.license_file_path ? (
-                              <a href={`http://localhost:3000/${b.license_file_path}`} target="_blank" rel="noreferrer">View ID</a>
-                            ) : (
-                              <span style={{ color: "#9ca3af" }}>None</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue by Room Type</h3>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button onClick={() => setRoomChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "bar" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "bar" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
+                    <button onClick={() => setRoomChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
+                  </div>
                 </div>
-              )}
+                <ResponsiveContainer width="100%" height="100%">
+                  {roomChartType === "bar" ? (
+                    <BarChart data={analytics.revenue_by_room_type || []}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                      <XAxis dataKey="room_type" />
+                      <YAxis />
+                      <Tooltip formatter={(value) => `₹${value}`} />
+                      <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  ) : (
+                    <PieChart>
+                      <Tooltip formatter={(value) => `₹${value}`} />
+                      <Pie data={analytics.revenue_by_room_type || []} dataKey="revenue" nameKey="room_type" cx="50%" cy="50%" outerRadius={100} label>
+                        {(analytics.revenue_by_room_type || []).map((entry, index) => (
+                          <Cell key={`room-${index}`} fill={["#10b981","#3b82f6","#f59e0b","#a78bfa","#ef4444"][index % 5]} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Lead Time (Days before check-in)</h3>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button onClick={() => setLeadChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: leadChartType === "bar" ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.12)", background: leadChartType === "bar" ? "rgba(245,158,11,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
+                    <button onClick={() => setLeadChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: leadChartType === "pie" ? "1px solid #14b8a6" : "1px solid rgba(255,255,255,0.12)", background: leadChartType === "pie" ? "rgba(20,184,166,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height="100%">
+                  {leadChartType === "bar" ? (
+                    <BarChart data={analytics.lead_time || []}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="bucket" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  ) : (
+                    <PieChart>
+                      <Tooltip />
+                      <Pie data={analytics.lead_time || []} dataKey="count" nameKey="bucket" cx="50%" cy="50%" outerRadius={100} label>
+                        {(analytics.lead_time || []).map((entry, index) => (
+                          <Cell key={`lead-${index}`} fill={["#f59e0b","#10b981","#3b82f6","#a78bfa","#ef4444","#14b8a6"][index % 6]} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
             </div>
+
+            {/* Removed: Top Rooms and Bookings by Day of Week sections */}
+
           </div>
         )}
 
@@ -548,7 +687,8 @@ const cardStyle = {
   boxShadow: "0 25px 60px rgba(0,0,0,0.35)",
   border: "1px solid rgba(255,255,255,0.08)",
   backdropFilter: "blur(14px)",
-  WebkitBackdropFilter: "blur(14px)"
+  WebkitBackdropFilter: "blur(14px)",
+  minWidth: "0" // allow charts inside grids/flex to compute width
 };
 const metricCardStyle = { 
   ...cardStyle, 

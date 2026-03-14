@@ -88,6 +88,8 @@ db.connect()
 (async () => {
   try {
     await db.query("ALTER TABLE hotels ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false");
+    await db.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_source VARCHAR(50) DEFAULT 'web'");
+    await db.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS device VARCHAR(50) DEFAULT 'desktop'");
   } catch (e) {
     console.error("Failed to ensure is_verified column:", e.message);
   }
@@ -187,6 +189,9 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
   const checkInISO = checkInDate.toISOString().slice(0, 10);
   const checkOutISO = checkOutDate.toISOString().slice(0, 10);
   const licensePath = req.file ? req.file.path.replace(/\\/g, "/") : null;
+  const bookingSource = (req.body.booking_source || "web").toLowerCase();
+  const ua = (req.headers["user-agent"] || "").toLowerCase();
+  const device = (req.body.device || (ua.includes("mobile") ? "mobile" : "desktop")).toLowerCase();
 
   try {
     await db.query("BEGIN"); // Start transaction
@@ -226,10 +231,10 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
     // --- NEW: INSERT WITH THE NEW COLUMNS ---
     const bookingResult = await db.query(
       `INSERT INTO bookings
-       (hotel_id, room_id, guest_name, guest_phone, guest_email, check_in_date, check_out_date, number_of_rooms, booking_status, payment_status, transaction_id, booking_ref, adults, children, license_file_path)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', $9, $10, $11, $12, $13, $14)
+       (hotel_id, room_id, guest_name, guest_phone, guest_email, check_in_date, check_out_date, number_of_rooms, booking_status, payment_status, transaction_id, booking_ref, adults, children, license_file_path, booking_source, device)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING booking_ref`,
-      [hotel_id, room_id, guest_name, guest_phone, guest_email || null, checkInISO, checkOutISO, number_of_rooms, payOnArrival ? 'pending' : 'paid', fakeTxnId, bookingRef, adults, children, licensePath]
+      [hotel_id, room_id, guest_name, guest_phone, guest_email || null, checkInISO, checkOutISO, number_of_rooms, payOnArrival ? 'pending' : 'paid', fakeTxnId, bookingRef, adults, children, licensePath, bookingSource, device]
     );
 
     // Attempt to send confirmation email if SMTP is configured
@@ -928,25 +933,48 @@ app.put("/api/rooms/:room_id", verifyToken, async (req, res) => {
 
 app.get("/api/staff/bookings", verifyToken , async (req, res) => {
   const  hotel_id  = req.user.hotel_id;
+  const { date_from, date_to } = req.query;
 
   if (!hotel_id) {
     return res.status(400).json({ message: "hotel_id is required" });
   }
 
   try {
+    const normFrom = date_from ? date_from.trim() : null;
+    const normTo = date_to ? date_to.trim() : null;
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (normFrom && !dateRegex.test(normFrom)) return res.status(400).json({ message: "Invalid date_from" });
+    if (normTo && !dateRegex.test(normTo)) return res.status(400).json({ message: "Invalid date_to" });
+
+    const conditions = ["b.hotel_id = $1"];
+    const params = [hotel_id];
+    // Check-in window filter (inclusive)
+    if (normFrom && normTo) {
+      params.push(normFrom);
+      params.push(normTo);
+      conditions.push(`b.check_in_date BETWEEN $${params.length-1} AND $${params.length}`);
+    } else if (normFrom) {
+      params.push(normFrom);
+      conditions.push(`b.check_in_date >= $${params.length}`);
+    } else if (normTo) {
+      params.push(normTo);
+      conditions.push(`b.check_in_date <= $${params.length}`);
+    }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
     const result = await db.query(
       `SELECT b.booking_id, b.guest_name, b.guest_phone,
               b.check_in_date, b.check_out_date, b.booking_status,
               b.payment_status, b.booking_ref, b.transaction_id,
-              b.license_file_path,
+              b.license_file_path, b.booking_source, b.device,
               r.room_type, r.price_per_night,
               h.hotel_name
        FROM bookings b
        JOIN rooms r ON b.room_id = r.room_id
        JOIN hotels h ON b.hotel_id = h.hotel_id
-       WHERE b.hotel_id = $1
-       ORDER BY b.created_at DESC`,
-      [hotel_id]
+       ${whereClause}
+       ORDER BY b.check_in_date DESC, b.created_at DESC`,
+      params
     );
     
 
@@ -956,6 +984,34 @@ app.get("/api/staff/bookings", verifyToken , async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Staff: mark payment as paid (e.g., pay-on-arrival at check-in)
+app.post("/api/staff/bookings/:booking_id/mark-paid", verifyToken, async (req, res) => {
+  const { booking_id } = req.params;
+  const hotel_id = req.user.hotel_id;
+  if (!booking_id || !hotel_id) {
+    return res.status(400).json({ message: "booking_id and hotel_id are required" });
+  }
+  try {
+    console.log("Mark paid attempt", { booking_id, hotel_id });
+    const result = await db.query(
+      `UPDATE bookings
+         SET payment_status = 'paid',
+             booking_status = CASE WHEN booking_status = 'pending' THEN 'confirmed' ELSE booking_status END,
+             transaction_id = COALESCE(transaction_id, 'PAY_ON_ARRIVAL_' || booking_id)
+       WHERE booking_id = $1::int AND hotel_id = $2::int
+       RETURNING booking_id, booking_status, payment_status, transaction_id`,
+      [booking_id, hotel_id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "Booking not found for this hotel" });
+    }
+    res.json({ message: "Payment marked as paid", booking: result.rows[0] });
+  } catch (err) {
+    console.error("mark-paid error:", err.message);
+    res.status(500).json({ message: "Failed to update payment status" });
   }
 });
 
@@ -1134,12 +1190,23 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
        ORDER BY bookings DESC`,
       [hotel_id, startDateStr, endDateExclusiveStr]
     );
+    const peakMap = {};
+    peakDays.rows.forEach(r => {
+      peakMap[r.day_of_week.trim()] = parseInt(r.bookings) || 0;
+    });
+    const weekLabels = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+    const peakDaysFull = weekLabels.map(d => ({
+      day_of_week: d,
+      bookings: peakMap[d] || 0
+    }));
 
-    // 7️⃣ REVENUE TREND (For Line Chart) – spread revenue by stay nights, not booking creation date
+    // 7️⃣ REVENUE & OCCUPANCY TREND (stay-date based)
     const revenueTrend = await db.query(
       `SELECT 
          TO_CHAR(stay_date, 'Mon DD') as date,
-         COALESCE(SUM(r.price_per_night * COALESCE(b.number_of_rooms, 1)), 0) as daily_revenue
+         stay_date::date as stay_key,
+         COALESCE(SUM(r.price_per_night * COALESCE(b.number_of_rooms, 1)), 0) as daily_revenue,
+         COALESCE(SUM(COALESCE(b.number_of_rooms,1)),0) as occupied_rooms
        FROM bookings b
        JOIN rooms r ON b.room_id = r.room_id
        CROSS JOIN LATERAL generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
@@ -1168,6 +1235,199 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     const prevRevenue = parseInt(prevMetrics.rows[0].prev_revenue) || 0;
     const revenueChange = prevRevenue > 0 ? (((totalRevenue - prevRevenue) / prevRevenue) * 100).toFixed(1) : (totalRevenue > 0 ? 100 : 0);
 
+    // 🔟 PAYMENT MIX (creation window)
+    let paymentMixRows = [];
+    try {
+      const pm = await db.query(
+        `SELECT payment_status, COUNT(*) AS count
+           FROM bookings
+          WHERE hotel_id = $1
+            AND created_at >= $2
+            AND created_at < $3
+          GROUP BY payment_status`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      paymentMixRows = pm.rows;
+    } catch (e) {
+      console.error("payment mix error:", e.message);
+    }
+
+    // 1️⃣1️⃣ TOP ROOMS (revenue and cancellations)
+    let topRoomsRows = [];
+    try {
+      const tr = await db.query(
+        `WITH stay_rev AS (
+           SELECT r.room_type,
+                  COALESCE(SUM(r.price_per_night * COALESCE(b.number_of_rooms,1)),0) AS revenue,
+                  COUNT(DISTINCT b.booking_id) AS bookings
+             FROM bookings b
+             JOIN rooms r ON b.room_id = r.room_id
+             CROSS JOIN LATERAL generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
+            WHERE b.hotel_id = $1
+              AND b.booking_status = 'confirmed'
+              AND stay_date >= $2 AND stay_date < $3
+            GROUP BY r.room_type
+         ),
+         cancels AS (
+           SELECT r.room_type, COUNT(*) AS cancels
+             FROM bookings b
+             JOIN rooms r ON b.room_id = r.room_id
+         WHERE b.hotel_id = $1
+            AND b.booking_status = 'cancelled'
+              AND b.created_at >= $2 AND b.created_at < $3
+          GROUP BY r.room_type
+       )
+        SELECT sr.room_type,
+               sr.revenue,
+               sr.bookings,
+               COALESCE(c.cancels,0) AS cancels
+          FROM stay_rev sr
+          LEFT JOIN cancels c ON c.room_type = sr.room_type
+          ORDER BY sr.revenue DESC, sr.bookings DESC
+          LIMIT 5`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      topRoomsRows = tr.rows;
+    } catch (e) {
+      console.error("top rooms error:", e.message);
+    }
+
+    // 1️⃣2️⃣ LEAD TIME BUCKETS (confirmed bookings)
+    let leadTimeRows = [];
+    try {
+      const lt = await db.query(
+        `SELECT bucket, COUNT(*) AS count FROM (
+           SELECT CASE 
+             WHEN lt <= 1 THEN '0-1'
+             WHEN lt <= 3 THEN '2-3'
+             WHEN lt <= 7 THEN '4-7'
+             WHEN lt <= 14 THEN '8-14'
+             WHEN lt <= 30 THEN '15-30'
+             ELSE '30+'
+           END AS bucket
+           FROM (
+             SELECT GREATEST(0, DATE_PART('day', b.check_in_date - b.created_at)) AS lt
+               FROM bookings b
+              WHERE b.hotel_id = $1
+                AND b.booking_status = 'confirmed'
+                AND b.created_at >= $2
+                AND b.created_at < $3
+           ) t
+         ) buckets
+         GROUP BY bucket
+         ORDER BY 
+           CASE bucket
+             WHEN '0-1' THEN 1
+             WHEN '2-3' THEN 2
+             WHEN '4-7' THEN 3
+             WHEN '8-14' THEN 4
+             WHEN '15-30' THEN 5
+             ELSE 6
+           END`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      leadTimeRows = lt.rows;
+    } catch (e) {
+      console.error("lead time error:", e.message);
+    }
+
+    // 1️⃣3️⃣ PAYMENT DAILY (stay-date based paid vs pending)
+    let paymentDailyRows = [];
+    try {
+      const pd = await db.query(
+        `SELECT
+            stay_date::date as stay_key,
+            TO_CHAR(stay_date, 'Mon DD') as date,
+            SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid,
+            SUM(CASE WHEN payment_status != 'paid' THEN 1 ELSE 0 END) as pending
+         FROM bookings b
+         CROSS JOIN LATERAL generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
+        WHERE b.hotel_id = $1
+          AND b.booking_status IN ('confirmed','pending')
+          AND stay_date >= $2 AND stay_date < $3
+        GROUP BY stay_date
+        ORDER BY stay_date`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      paymentDailyRows = pd.rows;
+    } catch (e) {
+      console.error("payment daily error:", e.message);
+    }
+
+    // 1️⃣4️⃣ Cancellations by payment type (creation window)
+    let cancelsByPay = [];
+    try {
+      const cp = await db.query(
+        `SELECT payment_status, COUNT(*) as cancels
+           FROM bookings
+          WHERE hotel_id = $1
+            AND booking_status = 'cancelled'
+            AND created_at >= $2 AND created_at < $3
+          GROUP BY payment_status`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      cancelsByPay = cp.rows;
+    } catch (e) {
+      console.error("cancel by pay error:", e.message);
+    }
+
+    // 1️⃣5️⃣ Source mix & trend
+    let sourceMix = [];
+    let sourceTrendRows = [];
+    try {
+      const sm = await db.query(
+        `SELECT COALESCE(booking_source,'unknown') AS source, COUNT(*) AS count
+           FROM bookings
+          WHERE hotel_id = $1
+            AND created_at >= $2 AND created_at < $3
+          GROUP BY COALESCE(booking_source,'unknown')`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      sourceMix = sm.rows;
+
+      const st = await db.query(
+        `SELECT 
+            created_at::date as d,
+            TO_CHAR(created_at::date, 'Mon DD') as date,
+            SUM(CASE WHEN booking_source='web' THEN 1 ELSE 0 END) as web,
+            SUM(CASE WHEN booking_source='chat' THEN 1 ELSE 0 END) as chat,
+            SUM(CASE WHEN booking_source='phone' THEN 1 ELSE 0 END) as phone,
+            SUM(CASE WHEN booking_source='ota' THEN 1 ELSE 0 END) as ota,
+            SUM(CASE WHEN booking_source NOT IN ('web','chat','phone','ota') OR booking_source IS NULL THEN 1 ELSE 0 END) as other
+         FROM bookings
+         WHERE hotel_id = $1
+           AND created_at >= $2 AND created_at < $3
+         GROUP BY d
+         ORDER BY d`,
+        [hotel_id, startDateStr, endDateExclusiveStr]
+      );
+      sourceTrendRows = st.rows;
+    } catch (e) {
+      console.error("source mix error:", e.message);
+    }
+
+    // 1️⃣6️⃣ Alerts: unpaid arrivals today/next 3 days
+    const todayStr = new Date().toISOString().slice(0,10);
+    const plus3 = new Date();
+    plus3.setDate(plus3.getDate() + 3);
+    const plus3Str = plus3.toISOString().slice(0,10);
+    let unpaidArrivals = 0;
+    try {
+      const ua = await db.query(
+        `SELECT COUNT(*) as cnt
+           FROM bookings
+          WHERE hotel_id = $1
+            AND booking_status IN ('confirmed','pending')
+            AND payment_status != 'paid'
+            AND check_in_date >= $2
+            AND check_in_date <= $3`,
+        [hotel_id, todayStr, plus3Str]
+      );
+      unpaidArrivals = parseInt(ua.rows[0].cnt) || 0;
+    } catch (e) {
+      console.error("unpaid arrivals error:", e.message);
+    }
+
     // 9️⃣ TODAY'S AVAILABLE ROOMS (current snapshot)
     const availSnapshot = await db.query(
       `SELECT 
@@ -1187,6 +1447,19 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     const availableRoomsToday = parseInt(availSnapshot.rows[0].available_rooms) || 0;
 
     // 🚀 SEND PERFECTLY FORMATTED JSON
+    // Derive payment mix map
+    const paymentMixMap = paymentMixRows.reduce((acc, row) => {
+      acc[row.payment_status || "unknown"] = parseInt(row.count) || 0;
+      return acc;
+    }, {});
+
+    // Occupancy % per day for trend
+    const trendWithOcc = revenueTrend.rows.map(r => ({
+      date: r.date,
+      daily_revenue: parseInt(r.daily_revenue) || 0,
+      occupancy_pct: totalCapacity > 0 ? Number(((parseInt(r.occupied_rooms) || 0) / totalCapacity) * 100).toFixed(1) : 0
+    }));
+
     res.json({
       period: period,
       hotel: {
@@ -1206,17 +1479,62 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
         adr: adr,
         alos: alos,
         cancellation_rate: cancellationRate,
-        repeat_guest_rate: repeatGuestRate
+        repeat_guest_rate: repeatGuestRate,
+        payment_mix: paymentMixMap
       },
       revenue_by_room_type: revenueByRoom.rows.map(r => ({
         room_type: r.room_type,
         revenue: parseInt(r.revenue) || 0
       })),
-      peak_days: peakDays.rows.map(r => ({
-        day_of_week: r.day_of_week,
-        bookings: parseInt(r.bookings) || 0
+      peak_days: peakDaysFull,
+      revenue_trend: trendWithOcc,
+      top_rooms: topRoomsRows.map(r => ({
+        room_type: r.room_type,
+        revenue: parseInt(r.revenue) || 0,
+        bookings: parseInt(r.bookings) || 0,
+        cancels: parseInt(r.cancels) || 0
       })),
-      revenue_trend: revenueTrend.rows,
+      lead_time: leadTimeRows.map(r => ({
+        bucket: r.bucket,
+        count: parseInt(r.count) || 0
+      })),
+      payment_daily: paymentDailyRows.map(r => ({
+        date: r.date,
+        paid: parseInt(r.paid) || 0,
+        pending: parseInt(r.pending) || 0
+      })),
+      cancellations_by_payment: (() => {
+        // ensure all payment statuses appear, even if 0 cancels
+        const cancelMap = {};
+        cancelsByPay.forEach(r => {
+          cancelMap[(r.payment_status || "unknown")] = parseInt(r.cancels) || 0;
+        });
+        Object.keys(paymentMixMap).forEach(k => {
+          if (!cancelMap.hasOwnProperty(k)) cancelMap[k] = 0;
+        });
+        // Always include paid/pending buckets for chart stability
+        if (!cancelMap.hasOwnProperty("paid")) cancelMap["paid"] = 0;
+        if (!cancelMap.hasOwnProperty("pending")) cancelMap["pending"] = 0;
+        return Object.entries(cancelMap).map(([k,v]) => ({
+          payment_status: k,
+          cancels: v
+        }));
+      })(),
+      source_mix: sourceMix.map(r => ({
+        source: r.source,
+        count: parseInt(r.count) || 0
+      })),
+      source_trend: sourceTrendRows.map(r => ({
+        date: r.date,
+        web: parseInt(r.web) || 0,
+        chat: parseInt(r.chat) || 0,
+        phone: parseInt(r.phone) || 0,
+        ota: parseInt(r.ota) || 0,
+        other: parseInt(r.other) || 0
+      })),
+      alerts: {
+        unpaid_arrivals_next3: unpaidArrivals
+      },
       comparison: {
         revenue_change_percent: parseFloat(revenueChange),
         previous_period_revenue: prevRevenue
