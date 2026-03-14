@@ -300,14 +300,25 @@ const handleSendMessage = async () => {
       // THE MAGIC HANDOFF:
     // THE MAGIC HANDOFF:
       if (res.data.intent === "TRIGGER_CHECKOUT") {
+        // Ensure dates are set (fallback to today/tomorrow so checkout won't block)
+        const today = new Date();
+        const tomorrow = new Date();
+        tomorrow.setDate(today.getDate() + 1);
+        const safeCheckIn = checkIn || today.toISOString().split("T")[0];
+        const safeCheckOut = checkOut || tomorrow.toISOString().split("T")[0];
+        setCheckIn(safeCheckIn);
+        setCheckOut(safeCheckOut);
+
         // 1. Auto-fill the background booking form with the AI's collected data
         setBookingDetails({
           guestName: res.data.chatState.guest_name,
+          guestEmail: res.data.chatState.guest_email || "",
           guestPhone: res.data.chatState.guest_phone,
           // Map the new slots! Default to 1 room, 2 adults, 0 children if somehow missed
           numRooms: res.data.chatState.num_rooms || 1, 
           adults: res.data.chatState.adults || 2, 
-          children: res.data.chatState.children || 0
+          children: res.data.chatState.children || 0,
+          payOnArrival: res.data.chatState.pay_on_arrival ?? false
         });
         setSelectedRoomId(res.data.chatState.room_id);
 
@@ -347,14 +358,23 @@ const handleSendMessage = async () => {
         >
           🔍 Manage Booking
         </button>
-        <h1 style={{ fontSize: "48px", margin: "0 0 10px 0" }}>{hotel.hotel_name}</h1>
-        <p style={{ fontSize: "18px", color: colors.muted, margin: "0" }}>📍 {hotel.location} | {hotel.address}</p>
+        <h1 style={{ 
+          fontSize: "48px", 
+          margin: "0 0 10px 0",
+          color: "#f8fafc",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          textShadow: "0 2px 10px rgba(0,0,0,0.35)"
+        }}>
+          {hotel.hotel_name}
+        </h1>
+        <p style={{ fontSize: "18px", color: "#111827", margin: "0" }}>📍 {hotel.location} | {hotel.address}</p>
         {hotel.contact_phone && (
-          <p style={{ margin: "6px 0 0 0", color: colors.text, fontWeight: 600 }}>
-            📞 <a href={`tel:${hotel.contact_phone}`} style={{ color: colors.text, textDecoration: "none" }}>{hotel.contact_phone}</a>
+          <p style={{ margin: "6px 0 0 0", color: "#111827", fontWeight: 700 }}>
+            📞 <a href={`tel:${hotel.contact_phone}`} style={{ color: "#111827", textDecoration: "none" }}>{hotel.contact_phone}</a>
           </p>
         )}
-        <p style={{ margin: "8px 0 0 0", color: colors.accent, fontSize: "16px" }}>
+        <p style={{ margin: "8px 0 0 0", color: "#111827", fontSize: "16px", fontWeight: 700 }}>
           ⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)
         </p>
       </header>
@@ -606,7 +626,15 @@ const handleSendMessage = async () => {
                 onChange={(e) => setChatInput(e.target.value)} 
                 onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                 placeholder="Ask about rooms or book..." 
-                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                style={{ 
+                  flex: 1, 
+                  padding: "10px", 
+                  borderRadius: "6px", 
+                  border: "1px solid #ccc",
+                  background: "#ffffff",
+                  color: "#0b1220",
+                  caretColor: "#2563eb"
+                }}
               />
               <button onClick={handleSendMessage} style={{ padding: "10px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>
                 Send
@@ -719,6 +747,7 @@ const handleSendMessage = async () => {
                 }}>
                   <h4 style={{ margin: "0 0 15px 0", color: "#0a0f1f", fontSize: "17px", letterSpacing: "0.25px" }}>Booking Receipt</h4>
                   <p style={{ margin: "6px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Status:</strong> <span style={{ color: foundBooking.booking_status === 'confirmed' ? '#0ea5e9' : '#e11d48', fontWeight: 700 }}>{foundBooking.booking_status.toUpperCase()}</span></p>
+                  <p style={{ margin: "6px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Payment:</strong> <span style={{ color: (foundBooking.payment_status || '').toLowerCase() === 'paid' ? '#16a34a' : '#f59e0b', fontWeight: 700 }}>{(foundBooking.payment_status || 'pending').toUpperCase()}</span></p>
                   <p style={{ margin: "6px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Guest:</strong> {foundBooking.guest_name}</p>
                   <p style={{ margin: "6px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Room:</strong> {foundBooking.room_type} ({foundBooking.number_of_rooms} room/s)</p>
                   <p style={{ margin: "6px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Check-in:</strong> {new Date(foundBooking.check_in_date).toLocaleDateString()}</p>

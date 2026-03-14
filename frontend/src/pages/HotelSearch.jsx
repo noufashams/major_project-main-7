@@ -114,7 +114,7 @@ function HotelSearch() {
       minHeight: "100vh",
       backgroundColor: "#0c111d",
       backgroundImage: [
-        "linear-gradient(125deg, rgba(0,0,0,0.58), rgba(0,0,0,0.78))",
+        "linear-gradient(125deg, rgba(0,0,0,0.82), rgba(0,0,0,0.92))",
         "url('/assets/hero-bg.jpg')"
       ].join(', '),
       backgroundSize: "cover, cover",
@@ -127,7 +127,7 @@ function HotelSearch() {
       <div style={{ maxWidth: "1100px", margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: "28px" }}>
           <p style={{ letterSpacing: "6px", textTransform: "uppercase", color: "#fde68a", marginBottom: "8px", fontSize: "12px", fontWeight: 700 }}>Moodboard</p>
-          <h1 style={{ fontSize: "40px", margin: 0, color: "#fff7ed", letterSpacing: "1px", textShadow: "0 6px 20px rgba(0,0,0,0.35)" }}>Aesthetic Stays</h1>
+          <h1 style={{ fontSize: "40px", margin: 0, color: "#fff7ed", letterSpacing: "1px", textShadow: "0 6px 20px rgba(0,0,0,0.35)" }}>FIND YOUR ROOMS</h1>
           <p style={{ marginTop: "8px", color: "#f1f5f9", fontSize: "15px" }}>Save, share, and book hotels that match your vibe.</p>
         </div>
 

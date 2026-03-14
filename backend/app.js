@@ -232,14 +232,6 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
       [hotel_id, room_id, guest_name, guest_phone, guest_email || null, checkInISO, checkOutISO, number_of_rooms, payOnArrival ? 'pending' : 'paid', fakeTxnId, bookingRef, adults, children, licensePath]
     );
 
-    // If pay on arrival, mark booking status pending for staff visibility
-    if (payOnArrival) {
-      await db.query(
-        "UPDATE bookings SET booking_status = 'pending' WHERE booking_ref = $1",
-        [bookingRef]
-      );
-    }
-
     // Attempt to send confirmation email if SMTP is configured
     let emailSent = false;
     let emailError = null;
@@ -315,7 +307,7 @@ app.post("/api/guest/lookup-booking", async (req, res) => {
     const result = await db.query(
       `SELECT b.booking_ref, b.guest_name, b.check_in_date, b.check_out_date, 
               b.booking_status, b.number_of_rooms, r.room_type, r.price_per_night,
-              h.hotel_name, h.hotel_id
+              h.hotel_name, h.hotel_id, b.payment_status
        FROM bookings b
        JOIN rooms r ON b.room_id = r.room_id
        JOIN hotels h ON b.hotel_id = h.hotel_id
@@ -945,6 +937,7 @@ app.get("/api/staff/bookings", verifyToken , async (req, res) => {
     const result = await db.query(
       `SELECT b.booking_id, b.guest_name, b.guest_phone,
               b.check_in_date, b.check_out_date, b.booking_status,
+              b.payment_status, b.booking_ref, b.transaction_id,
               b.license_file_path,
               r.room_type, r.price_per_night,
               h.hotel_name

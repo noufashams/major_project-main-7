@@ -482,7 +482,9 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
     adults: null,      // NEW
     children: null,    // NEW
     guest_name: null,
+    guest_email: null,
     guest_phone: null,
+    pay_on_arrival: false, // default to pay now; guest can opt into pay on arrival
     fallback_hits: 0,
     ...currentState
   };
@@ -600,6 +602,20 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
     if (phoneMatch) state.guest_phone = phoneMatch[0];
   }
 
+  // Extract Email
+  if (!state.guest_email) {
+    const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    if (emailMatch) state.guest_email = emailMatch[0];
+  }
+
+  // Extract payment preference
+  if (text.includes("pay on arrival") || text.includes("pay later") || text.includes("cash")) {
+    state.pay_on_arrival = true;
+  }
+  if (text.includes("pay now") || text.includes("online payment") || text.includes("card payment")) {
+    state.pay_on_arrival = false;
+  }
+
   // Extract Name (allow even if phone already provided)
   if (state.adults !== null && !state.guest_name) {
     const hasLetters = /[a-zA-Z]/.test(text);
@@ -635,13 +651,16 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
   else if (!state.guest_phone) {
     response = `Thanks, ${state.guest_name}. Lastly, I need your 10-digit phone number.`;
   } 
+  else if (!state.guest_email) {
+    response = `Almost done! Please share your email so we can send the confirmation.`;
+  } 
   else {
     // THE BUCKET IS FULL!
     if (["yes", "confirm", "proceed", "ok", "checkout"].some(w => text.includes(w))) {
       intent = "TRIGGER_CHECKOUT";
-      response = "Perfect! I am generating your secure payment link now...";
+      response = "Perfect! I am generating your secure payment link now. You can switch to Pay on Arrival and upload your ID document in the form below if you prefer.";
     } else {
-      response = `Here are your details:\n👤 Name: ${state.guest_name}\n📱 Phone: ${state.guest_phone}\n🛏️ Rooms: ${state.num_rooms}x ${state.room_type}\n👨‍👩‍👧 Guests: ${state.adults} Adults, ${state.children} Children\n\nShall I open the payment screen to confirm? (Reply 'Yes')`;
+      response = `Here are your details:\n👤 Name: ${state.guest_name}\n📧 Email: ${state.guest_email}\n📱 Phone: ${state.guest_phone}\n🛏️ Rooms: ${state.num_rooms}x ${state.room_type}\n👨‍👩‍👧 Guests: ${state.adults} Adults, ${state.children} Children\n💳 Payment: ${state.pay_on_arrival ? "Pay on arrival" : "Pay now"}\n\nShall I open the payment screen to confirm? (Reply 'Yes'). Please upload an ID document in the form below before confirming.`;
     }
   }
 

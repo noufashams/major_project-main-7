@@ -403,6 +403,7 @@ useEffect(() => {
                         <th style={th}>Check-In</th>
                         <th style={th}>Check-Out</th>
                         <th style={th}>Status</th>
+                        <th style={th}>Payment</th>
                         <th style={th}>ID</th>
                       </tr>
                     </thead>
@@ -416,6 +417,19 @@ useEffect(() => {
                           <td style={td}>{new Date(b.check_in_date).toLocaleDateString()}</td>
                           <td style={td}>{new Date(b.check_out_date).toLocaleDateString()}</td>
                           <td style={td}>{b.booking_status}</td>
+                          <td style={td}>
+                            <span style={{
+                              display: "inline-block",
+                              padding: "4px 10px",
+                              borderRadius: "999px",
+                              fontWeight: 700,
+                              fontSize: "12px",
+                              color: (b.payment_status || "pending").toLowerCase() === "paid" ? "#166534" : "#854d0e",
+                              backgroundColor: (b.payment_status || "pending").toLowerCase() === "paid" ? "rgba(22,101,52,0.12)" : "rgba(133,77,14,0.14)"
+                            }}>
+                              {(b.payment_status || "pending").toUpperCase()}
+                            </span>
+                          </td>
                           <td style={td}>
                             {b.license_file_path ? (
                               <a href={`http://localhost:3000/${b.license_file_path}`} target="_blank" rel="noreferrer">View ID</a>
