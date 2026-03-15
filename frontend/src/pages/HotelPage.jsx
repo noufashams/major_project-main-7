@@ -62,7 +62,6 @@ function HotelPage() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingMsgIndex, setSpeakingMsgIndex] = useState(null);
   const [spokenWordIndex, setSpokenWordIndex] = useState(-1);
-  const recognitionRef = React.useRef(null);
 
   const colors = {
     // base palette for glass cards
@@ -803,33 +802,28 @@ function HotelPage() {
               })}
             </div>
 
-            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-              {/* Mic button - tap to toggle */}
+            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", background: "#f8fafc" }}>
+              {/* Mic toggle */}
               <button
-                onClick={() => {
-                  if (isListening) {
-                    stopListening();
-                  } else {
-                    startListening();
-                  }
-                }}
-                title={isListening ? "Stop listening" : "Tap to speak"}
+                onClick={() => (isListening ? stopListening() : startListening())}
+                title={isListening ? "Stop listening" : "Start voice input"}
                 style={{
                   padding: "10px 12px",
-                  backgroundColor: isListening ? "#ef4444" : "#374151",
+                  backgroundColor: isListening ? "#ef4444" : "#0f172a",
                   color: "white",
                   border: "none",
-                  borderRadius: "6px",
+                  borderRadius: "8px",
                   cursor: "pointer",
                   fontSize: "18px",
-                  transition: "background-color 0.2s",
+                  transition: "background-color 0.2s, transform 0.1s",
                   animation: isListening ? "pulse 1s infinite" : "none"
                 }}
               >
                 {isListening ? "■" : "🎤"}
               </button>
+
               {/* TTS toggle */}
-              <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", color: "#4b5563", cursor: "pointer", whiteSpace: "nowrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#475569", cursor: "pointer", whiteSpace: "nowrap" }}>
                 <input
                   type="checkbox"
                   checked={ttsEnabled}
@@ -838,43 +832,39 @@ function HotelPage() {
                 />
                 🔊 Read replies
               </label>
+
+              {/* Text input */}
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder={isListening ? "🎙️ Listening..." : "Ask about rooms or book..."}
+                placeholder={isListening ? "Listening..." : "Ask about rooms or book..."}
                 style={{
                   flex: 1,
-                  padding: "10px",
-                  borderRadius: "6px",
-                  border: isListening ? "2px solid #ef4444" : "1px solid #ccc",
-                  background: "#ffffff",
+                  padding: "12px",
+                  borderRadius: "10px",
+                  border: isListening ? "2px solid #ef4444" : "1px solid #cbd5e1",
+                  background: "white",
                   color: "#0b1220",
-                  caretColor: "#2563eb"
+                  boxShadow: "0 6px 16px rgba(15,23,42,0.08)",
+                  transition: "border-color 0.2s, box-shadow 0.2s"
                 }}
               />
-              {/* Microphone button */}
+
+              {/* Send */}
               <button
-                onMouseDown={startListening}
-                onMouseUp={() => { stopListening(); setTimeout(handleSendMessage, 300); }}
-                onTouchStart={startListening}
-                onTouchEnd={() => { stopListening(); setTimeout(handleSendMessage, 300); }}
-                title="Hold to speak"
+                onClick={handleSendMessage}
                 style={{
-                  padding: "10px 12px",
-                  backgroundColor: isListening ? "#ef4444" : "#374151",
+                  padding: "12px 16px",
+                  backgroundColor: "#2563eb",
                   color: "white",
                   border: "none",
-                  borderRadius: "6px",
+                  borderRadius: "8px",
                   cursor: "pointer",
-                  fontSize: "18px",
-                  transition: "background-color 0.2s",
-                  animation: isListening ? "pulse 1s infinite" : "none"
+                  fontWeight: 600,
+                  boxShadow: "0 10px 20px rgba(37,99,235,0.25)"
                 }}
               >
-                🎤
-              </button>
-              <button onClick={handleSendMessage} style={{ padding: "10px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>
                 Send
               </button>
             </div>
@@ -1095,20 +1085,3 @@ const secondaryButtonStyle = {
 };
 
 export default HotelPage;
-const RatingStars = ({ value, onChange }) => (
-  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-    {[1, 2, 3, 4, 5].map((n) => (
-      <span
-        key={n}
-        onClick={() => onChange(n)}
-        style={{
-          cursor: "pointer",
-          fontSize: "22px",
-          color: n <= value ? colors.accent : "rgba(0,0,0,0.25)"
-        }}
-      >
-        ★
-      </span>
-    ))}
-  </div>
-);
