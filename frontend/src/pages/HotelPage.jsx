@@ -1,5 +1,5 @@
 
-
+import React from "react";
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
@@ -35,7 +35,7 @@ function HotelPage() {
   // 4. Payment Simulation State
   const [showPayment, setShowPayment] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-// Manage Booking States
+  // Manage Booking States
   const [showLookup, setShowLookup] = useState(false);
   const [lookupRef, setLookupRef] = useState("");
   const [lookupPhone, setLookupPhone] = useState("");
@@ -50,6 +50,13 @@ function HotelPage() {
   const [chatHistory, setChatHistory] = useState([
     { sender: "ai", text: "Hi! I'm the AI Receptionist. How can I help you with your booking?" }
   ]);
+
+  // 4. Voice State
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingMsgIndex, setSpeakingMsgIndex] = useState(null);
+  const [spokenWordIndex, setSpokenWordIndex] = useState(-1);
+  const recognitionRef = React.useRef(null);
 
   const colors = {
     // base palette for glass cards
@@ -85,7 +92,7 @@ function HotelPage() {
 
   const RatingStars = ({ value, onChange }) => (
     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-      {[1,2,3,4,5].map((n) => (
+      {[1, 2, 3, 4, 5].map((n) => (
         <span
           key={n}
           onClick={() => onChange(n)}
@@ -149,7 +156,7 @@ function HotelPage() {
     const { name, value, type, checked } = e.target;
     setBookingDetails(prev => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
   };
-const handleLookupBooking = async () => {
+  const handleLookupBooking = async () => {
     try {
       const res = await axios.post("http://localhost:3000/api/guest/lookup-booking", {
         booking_ref: lookupRef,
@@ -175,21 +182,21 @@ const handleLookupBooking = async () => {
         booking_ref: foundBooking.booking_ref,
         guest_phone: lookupPhone // We reuse the phone number they typed into the lookup input
       });
-      
+
       alert("✅ Booking cancelled successfully.");
-      
+
       // Refresh the lookup receipt so it turns RED and says "CANCELLED"
-      handleLookupBooking(); 
-      
+      handleLookupBooking();
+
       // Refresh the hotel availability so the calendar immediately shows the room as free again!
-      fetchHotelData(); 
+      fetchHotelData();
 
     } catch (err) {
       alert("❌ " + (err.response?.data?.message || "Failed to cancel booking."));
     }
   };
   // Submits the actual booking
-const processRealBooking = async () => {
+  const processRealBooking = async () => {
     if (!checkIn || !checkOut) {
       alert("Please select both Check-In and Check-Out dates at the top of the page.");
       return;
@@ -222,16 +229,16 @@ const processRealBooking = async () => {
       const res = await axios.post("http://localhost:3000/api/bookings", form, {
         headers: { "Content-Type": "multipart/form-data" }
       });
-      
+
       alert(`✅ Booking Confirmed!\n\nYour Reference is: ${res.data.booking_ref}\n\nPlease save this to manage your booking later.`);
-      
-      setSelectedRoomId(null); 
-      setBookingDetails({ guestName: "", guestEmail: "", guestPhone: "", numRooms: 1, adults: 2, children: 0, payOnArrival: false }); 
+
+      setSelectedRoomId(null);
+      setBookingDetails({ guestName: "", guestEmail: "", guestPhone: "", numRooms: 1, adults: 2, children: 0, payOnArrival: false });
       setLicenseFile(null);
-      
-      setShowPayment(false); 
+
+      setShowPayment(false);
       setIsProcessing(false);
-      
+
       fetchHotelData(); // Refresh availability
 
     } catch (err) {
@@ -254,15 +261,15 @@ const processRealBooking = async () => {
 
   const handleSimulatePayment = () => {
     setIsProcessing(true); // Start the loading spinner
-    
+
     // Wait exactly 2.5 seconds to make it feel real, then book the room
     setTimeout(() => {
       processRealBooking();
-    }, 2500); 
+    }, 2500);
   };
   // const handleSendMessage = async () => {
   //   if (!chatInput.trim()) return;
-    
+
   //   const newHistory = [...chatHistory, { sender: "user", text: chatInput }];
   //   setChatHistory(newHistory);
   //   setChatInput("");
@@ -279,9 +286,89 @@ const processRealBooking = async () => {
   //     setChatHistory([...newHistory, { sender: "ai", text: "Sorry, I am having trouble connecting to the front desk right now." }]);
   //   }
   // };
-const handleSendMessage = async () => {
+  // =====================
+  // VOICE HELPERS
+  // =====================
+  const startListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { alert("Voice recognition is not supported in this browser. Please use Chrome."); return; }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map(r => r[0].transcript)
+        .join("");
+      setChatInput(transcript);
+    };
+    recognition.start();
+    recognitionRef.current = recognition;
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  };
+
+  const speakText = (text, msgIndex) => {
+    if (!text || isSpeaking) return;
+    if (!window.speechSynthesis) { console.warn("Speech synthesis not supported"); return; }
+
+    window.speechSynthesis.cancel(); // stop any current speech
+    const words = text.split(/\s+/);
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    // Pick a female English voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const femaleVoice = voices.find(v =>
+      v.lang.startsWith("en") && /female|zira|hazel|susan|samantha|victoria/i.test(v.name)
+    ) || voices.find(v => v.lang.startsWith("en"));
+    if (femaleVoice) utterance.voice = femaleVoice;
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+
+    setIsSpeaking(true);
+    setSpeakingMsgIndex(msgIndex);
+    setSpokenWordIndex(0);
+
+    utterance.onboundary = (event) => {
+      if (event.name === "word") {
+        // Count which word we're at by the char index
+        const spoken = text.slice(0, event.charIndex + event.charLength);
+        const wordIdx = spoken.trim().split(/\s+/).length - 1;
+        setSpokenWordIndex(wordIdx);
+      }
+    };
+
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setSpeakingMsgIndex(null);
+      setSpokenWordIndex(-1);
+    };
+
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      setSpeakingMsgIndex(null);
+      setSpokenWordIndex(-1);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setSpeakingMsgIndex(null);
+    setSpokenWordIndex(-1);
+  };
+
+  const handleSendMessage = async () => {
     if (!chatInput.trim()) return;
-    
+
     const newHistory = [...chatHistory, { sender: "user", text: chatInput }];
     setChatHistory(newHistory);
     setChatInput("");
@@ -300,10 +387,14 @@ const handleSendMessage = async () => {
       setChatState(res.data.chatState);
 
       // Add the AI's response to the chat window
+      const newAiMsgIndex = newHistory.length; // index of the new AI message
       setChatHistory([...newHistory, { sender: "ai", text: res.data.reply }]);
 
+      // Auto-speak the AI response
+      speakText(res.data.reply, newAiMsgIndex);
+
       // THE MAGIC HANDOFF:
-    // THE MAGIC HANDOFF:
+      // THE MAGIC HANDOFF:
       if (res.data.intent === "TRIGGER_CHECKOUT") {
         // Ensure dates are set (fallback to today/tomorrow so checkout won't block)
         const today = new Date();
@@ -320,8 +411,8 @@ const handleSendMessage = async () => {
           guestEmail: res.data.chatState.guest_email || "",
           guestPhone: res.data.chatState.guest_phone,
           // Map the new slots! Default to 1 room, 2 adults, 0 children if somehow missed
-          numRooms: res.data.chatState.num_rooms || 1, 
-          adults: res.data.chatState.adults || 2, 
+          numRooms: res.data.chatState.num_rooms || 1,
+          adults: res.data.chatState.adults || 2,
           children: res.data.chatState.children || 0,
           payOnArrival: res.data.chatState.pay_on_arrival ?? false
         });
@@ -344,7 +435,7 @@ const handleSendMessage = async () => {
   if (loading || !hotel) return <div style={{ padding: "50px", textAlign: "center" }}>Loading property details...</div>;
 
   return (
-    <div style={{ 
+    <div style={{
       fontFamily: "system-ui, sans-serif",
       color: colors.text,
       backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.25) 60%, rgba(255,255,255,0.3) 100%), url('https://images.unsplash.com/photo-1540541338287-41700207dee6?auto=format&fit=crop&w=2000&q=80')",
@@ -354,17 +445,17 @@ const handleSendMessage = async () => {
       backgroundAttachment: "fixed",
       minHeight: "100vh"
     }}>
-      
+
       {/* WHITE-LABEL HERO SECTION */}
       <header style={{ backgroundColor: "rgba(255,255,255,0.55)", backdropFilter: "blur(10px)", color: colors.text, padding: "60px 20px", textAlign: "center", borderBottom: `1px solid ${colors.border}` }}>
-        <button 
+        <button
           onClick={() => setShowLookup(true)}
           style={{ position: "absolute", top: "20px", right: "20px", background: "rgba(255,255,255,0.35)", color: colors.text, border: `1px solid ${colors.border}`, padding: "8px 16px", borderRadius: "10px", cursor: "pointer", backdropFilter: "blur(6px)" }}
         >
           🔍 Manage Booking
         </button>
-        <h1 style={{ 
-          fontSize: "48px", 
+        <h1 style={{
+          fontSize: "48px",
           margin: "0 0 10px 0",
           color: "#f8fafc",
           letterSpacing: "0.06em",
@@ -406,7 +497,7 @@ const handleSendMessage = async () => {
         )}
 
         {/* Ratings removed from public view; now only after booking lookup */}
-        
+
         {/* DATE PICKER */}
         <div style={{ backgroundColor: "rgba(255,255,255,0.78)", padding: "24px", borderRadius: "16px", boxShadow: "0 18px 40px rgba(0,0,0,0.12)", border: "1px solid rgba(0,0,0,0.05)", marginBottom: "30px", display: "flex", gap: "20px", alignItems: "center", flexWrap: "wrap", backdropFilter: "blur(12px)" }}>
           <div>
@@ -427,7 +518,7 @@ const handleSendMessage = async () => {
         <div style={{ display: "grid", gap: "20px" }}>
           {rooms.map((room) => (
             <div key={room.room_id} style={{ backgroundColor: "rgba(255,255,255,0.78)", padding: "24px", borderRadius: "18px", border: "1px solid rgba(0,0,0,0.05)", backdropFilter: "blur(16px)", boxShadow: "0 24px 60px rgba(0,0,0,0.14)" }}>
-              
+
               {/* Room Header Info */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
@@ -516,45 +607,45 @@ const handleSendMessage = async () => {
               )}
               {selectedRoomId === room.room_id && (
                 <div style={{ marginTop: "16px" }}>
-                    <div>
-                      <label style={labelStyle}>Full Name</label>
-                      <input type="text" name="guestName" value={bookingDetails.guestName} onChange={handleInputChange} placeholder="John Doe" style={{...inputStyle, width: "100%"}} />
-                    </div>
-                    <div>
-                      <label style={labelStyle}>Email</label>
-                      <input type="email" name="guestEmail" value={bookingDetails.guestEmail} onChange={handleInputChange} placeholder="you@example.com" style={{...inputStyle, width: "100%"}} />
-                    </div>
-                    <div>
-                      <label style={labelStyle}>Phone Number</label>
-                      <input type="tel" name="guestPhone" value={bookingDetails.guestPhone} onChange={handleInputChange} placeholder="+91 9876543210" style={{...inputStyle, width: "100%"}} />
-                    </div>
-                    <div>
-                      <label style={labelStyle}>Upload ID / License (optional)</label>
-                      <input
-                        type="file"
-                        accept=".jpg,.jpeg,.png,.pdf"
-                        onChange={(e) => setLicenseFile(e.target.files?.[0] || null)}
-                        style={{ ...inputStyle, width: "100%" }}
-                      />
-                      <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#6b7280" }}>Accepted: JPG, PNG, PDF</p>
-                    </div>
+                  <div>
+                    <label style={labelStyle}>Full Name</label>
+                    <input type="text" name="guestName" value={bookingDetails.guestName} onChange={handleInputChange} placeholder="John Doe" style={{ ...inputStyle, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Email</label>
+                    <input type="email" name="guestEmail" value={bookingDetails.guestEmail} onChange={handleInputChange} placeholder="you@example.com" style={{ ...inputStyle, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Phone Number</label>
+                    <input type="tel" name="guestPhone" value={bookingDetails.guestPhone} onChange={handleInputChange} placeholder="+91 9876543210" style={{ ...inputStyle, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Upload ID / License (optional)</label>
+                    <input
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.pdf"
+                      onChange={(e) => setLicenseFile(e.target.files?.[0] || null)}
+                      style={{ ...inputStyle, width: "100%" }}
+                    />
+                    <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#6b7280" }}>Accepted: JPG, PNG, PDF</p>
+                  </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginBottom: "24px" }}>
                     <div>
                       <label style={labelStyle}>Rooms</label>
-                      <select name="numRooms" value={bookingDetails.numRooms} onChange={handleInputChange} style={{...inputStyle, width: "100%"}}>
+                      <select name="numRooms" value={bookingDetails.numRooms} onChange={handleInputChange} style={{ ...inputStyle, width: "100%" }}>
                         {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
                     <div>
                       <label style={labelStyle}>Adults</label>
-                      <select name="adults" value={bookingDetails.adults} onChange={handleInputChange} style={{...inputStyle, width: "100%"}}>
+                      <select name="adults" value={bookingDetails.adults} onChange={handleInputChange} style={{ ...inputStyle, width: "100%" }}>
                         {[1, 2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
                     <div>
                       <label style={labelStyle}>Children</label>
-                      <select name="children" value={bookingDetails.children} onChange={handleInputChange} style={{...inputStyle, width: "100%"}}>
+                      <select name="children" value={bookingDetails.children} onChange={handleInputChange} style={{ ...inputStyle, width: "100%" }}>
                         {[0, 1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
@@ -573,7 +664,7 @@ const handleSendMessage = async () => {
 
                   <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
                     <button onClick={() => setSelectedRoomId(null)} style={secondaryButtonStyle}>Cancel</button>
-                   <button onClick={handleProceedToPayment} style={{...primaryButtonStyle, padding: "12px 32px"}}>Confirm Booking</button>
+                    <button onClick={handleProceedToPayment} style={{ ...primaryButtonStyle, padding: "12px 32px" }}>Confirm Booking</button>
                   </div>
                 </div>
               )}            </div>
@@ -600,9 +691,9 @@ const handleSendMessage = async () => {
             justifyContent: "center",
             zIndex: 2000
           }} onClick={() => setLightbox({ roomId: null, index: 0 })}>
-            <button onClick={e => {e.stopPropagation(); setLightbox(prev=>({roomId:prev.roomId,index:(prev.index-1+pics.length)%pics.length}))}} style={{position:"absolute",left:20,fontSize:30,color:"white",background:"none",border:"none",cursor:"pointer"}}>&larr;</button>
-            <img src={pic.picture_url} alt="Large" style={{maxWidth:"90%",maxHeight:"90%",borderRadius:"6px"}} onClick={e=>e.stopPropagation()} />
-            <button onClick={e => {e.stopPropagation(); setLightbox(prev=>({roomId:prev.roomId,index:(prev.index+1)%pics.length}))}} style={{position:"absolute",right:20,fontSize:30,color:"white",background:"none",border:"none",cursor:"pointer"}}>&rarr;</button>
+            <button onClick={e => { e.stopPropagation(); setLightbox(prev => ({ roomId: prev.roomId, index: (prev.index - 1 + pics.length) % pics.length })) }} style={{ position: "absolute", left: 20, fontSize: 30, color: "white", background: "none", border: "none", cursor: "pointer" }}>&larr;</button>
+            <img src={pic.picture_url} alt="Large" style={{ maxWidth: "90%", maxHeight: "90%", borderRadius: "6px" }} onClick={e => e.stopPropagation()} />
+            <button onClick={e => { e.stopPropagation(); setLightbox(prev => ({ roomId: prev.roomId, index: (prev.index + 1) % pics.length })) }} style={{ position: "absolute", right: 20, fontSize: 30, color: "white", background: "none", border: "none", cursor: "pointer" }}>&rarr;</button>
           </div>
         );
       })()}
@@ -615,39 +706,111 @@ const handleSendMessage = async () => {
               <span style={{ fontWeight: "bold" }}>AI Receptionist</span>
               <button onClick={() => setIsChatOpen(false)} style={{ background: "none", border: "none", color: "white", cursor: "pointer", fontSize: "20px" }}>×</button>
             </div>
-            
+
             <div style={{ flex: 1, padding: "16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", backgroundColor: "#f3f4f6" }}>
-              {chatHistory.map((msg, i) => (
-                <div key={i} style={{ alignSelf: msg.sender === "user" ? "flex-end" : "flex-start", backgroundColor: msg.sender === "user" ? "#2563eb" : "#e5e7eb", color: msg.sender === "user" ? "white" : "black", padding: "10px 14px", borderRadius: "8px", maxWidth: "80%" }}>
-                  {msg.text}
-                </div>
-              ))}
+              {chatHistory.map((msg, i) => {
+                const isActiveSpeech = speakingMsgIndex === i && msg.sender === "ai";
+                const words = msg.text.split(/\s+/);
+                return (
+                  <div key={i} style={{ alignSelf: msg.sender === "user" ? "flex-end" : "flex-start", maxWidth: "80%" }}>
+                    <div
+                      style={{
+                        backgroundColor: msg.sender === "user" ? "#2563eb" : "#e5e7eb",
+                        color: msg.sender === "user" ? "white" : "black",
+                        padding: "10px 14px",
+                        borderRadius: "8px",
+                        lineHeight: "1.6"
+                      }}
+                    >
+                      {msg.sender === "ai"
+                        ? words.map((word, wi) => (
+                          <span
+                            key={wi}
+                            style={{
+                              backgroundColor: isActiveSpeech && wi === spokenWordIndex
+                                ? "#facc15"
+                                : "transparent",
+                              color: isActiveSpeech && wi === spokenWordIndex
+                                ? "#1a1a1a"
+                                : "inherit",
+                              borderRadius: "3px",
+                              padding: "0 1px",
+                              transition: "background-color 0.15s"
+                            }}
+                          >
+                            {word}{" "}
+                          </span>
+                        ))
+                        : msg.text
+                      }
+                    </div>
+                    {msg.sender === "ai" && (
+                      <button
+                        onClick={() => isActiveSpeech ? stopSpeaking() : speakText(msg.text, i)}
+                        title={isActiveSpeech ? "Stop" : "Listen"}
+                        style={{
+                          marginTop: "4px",
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: "16px",
+                          opacity: 0.65
+                        }}
+                      >
+                        {isActiveSpeech ? "⏹️" : "🔊"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px" }}>
-              <input 
-                type="text" 
-                value={chatInput} 
-                onChange={(e) => setChatInput(e.target.value)} 
+            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center" }}>
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Ask about rooms or book..." 
-                style={{ 
-                  flex: 1, 
-                  padding: "10px", 
-                  borderRadius: "6px", 
-                  border: "1px solid #ccc",
+                placeholder={isListening ? "🎙️ Listening..." : "Ask about rooms or book..."}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "6px",
+                  border: isListening ? "2px solid #ef4444" : "1px solid #ccc",
                   background: "#ffffff",
                   color: "#0b1220",
                   caretColor: "#2563eb"
                 }}
               />
+              {/* Microphone button */}
+              <button
+                onMouseDown={startListening}
+                onMouseUp={() => { stopListening(); setTimeout(handleSendMessage, 300); }}
+                onTouchStart={startListening}
+                onTouchEnd={() => { stopListening(); setTimeout(handleSendMessage, 300); }}
+                title="Hold to speak"
+                style={{
+                  padding: "10px 12px",
+                  backgroundColor: isListening ? "#ef4444" : "#374151",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "18px",
+                  transition: "background-color 0.2s",
+                  animation: isListening ? "pulse 1s infinite" : "none"
+                }}
+              >
+                🎤
+              </button>
               <button onClick={handleSendMessage} style={{ padding: "10px 16px", backgroundColor: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>
                 Send
               </button>
             </div>
+            <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }`}</style>
           </div>
         ) : (
-          <button 
+          <button
             onClick={() => setIsChatOpen(true)}
             style={{ width: "60px", height: "60px", borderRadius: "30px", backgroundColor: "#2563eb", color: "white", border: "none", boxShadow: "0 4px 12px rgba(37,99,235,0.4)", cursor: "pointer", fontSize: "24px", display: "flex", alignItems: "center", justifyContent: "center" }}
           >
@@ -655,11 +818,11 @@ const handleSendMessage = async () => {
           </button>
         )}
       </div>
-{/* SIMULATED PAYMENT MODAL */}
+      {/* SIMULATED PAYMENT MODAL */}
       {showPayment && (
         <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", backgroundColor: "rgba(0,0,0,0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 9999 }}>
           <div style={{ backgroundColor: "white", padding: "30px", borderRadius: "12px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)" }}>
-            
+
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
               <h3 style={{ margin: 0 }}>Secure Checkout</h3>
               {!isProcessing && <button onClick={() => setShowPayment(false)} style={{ border: "none", background: "none", cursor: "pointer", fontSize: "18px" }}>❌</button>}
@@ -668,25 +831,25 @@ const handleSendMessage = async () => {
             <div style={{ backgroundColor: "#f3f4f6", padding: "15px", borderRadius: "8px", marginBottom: "20px", textAlign: "center" }}>
               <p style={{ margin: 0, color: "#6b7280", fontSize: "14px" }}>Total Amount Due</p>
               {/* In a real app, you would calculate Price * Nights * Rooms here */}
-              <h2 style={{ margin: "5px 0 0 0", color: "#111827" }}>Proceed to Pay</h2> 
+              <h2 style={{ margin: "5px 0 0 0", color: "#111827" }}>Proceed to Pay</h2>
             </div>
 
             <label style={labelStyle}>Card Number (Simulated)</label>
-            <input type="text" placeholder="XXXX XXXX XXXX XXXX" defaultValue="4242 4242 4242 4242" disabled={isProcessing} style={{...inputStyle, width: "100%", marginBottom: "15px", fontFamily: "monospace"}} />
-            
+            <input type="text" placeholder="XXXX XXXX XXXX XXXX" defaultValue="4242 4242 4242 4242" disabled={isProcessing} style={{ ...inputStyle, width: "100%", marginBottom: "15px", fontFamily: "monospace" }} />
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px", marginBottom: "24px" }}>
               <div>
                 <label style={labelStyle}>Expiry</label>
-                <input type="text" placeholder="MM/YY" defaultValue="12/26" disabled={isProcessing} style={{...inputStyle, width: "100%"}} />
+                <input type="text" placeholder="MM/YY" defaultValue="12/26" disabled={isProcessing} style={{ ...inputStyle, width: "100%" }} />
               </div>
               <div>
                 <label style={labelStyle}>CVV</label>
-                <input type="password" placeholder="123" defaultValue="123" disabled={isProcessing} style={{...inputStyle, width: "100%"}} />
+                <input type="password" placeholder="123" defaultValue="123" disabled={isProcessing} style={{ ...inputStyle, width: "100%" }} />
               </div>
             </div>
 
-            <button 
-              onClick={handleSimulatePayment} 
+            <button
+              onClick={handleSimulatePayment}
               disabled={isProcessing}
               style={{ ...primaryButtonStyle, width: "100%", padding: "14px", backgroundColor: isProcessing ? "#9ca3af" : "#10b981", fontSize: "16px" }}
             >
@@ -701,12 +864,12 @@ const handleSendMessage = async () => {
       {/* LOOKUP BOOKING MODAL */}
       {showLookup && (
         <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", backgroundColor: "rgba(0,0,0,0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}>
-          <div style={{ 
-            backgroundColor: "rgba(255,255,255,0.82)", 
-            padding: "30px", 
-            borderRadius: "16px", 
-            width: "420px", 
-            maxWidth: "90%", 
+          <div style={{
+            backgroundColor: "rgba(255,255,255,0.82)",
+            padding: "30px",
+            borderRadius: "16px",
+            width: "420px",
+            maxWidth: "90%",
             color: "#0b1220",
             fontFamily: "'Poppins','Inter','Segoe UI',sans-serif",
             fontSize: "15px",
@@ -718,18 +881,18 @@ const handleSendMessage = async () => {
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
               <h3 style={{ margin: 0, color: "#0b1220", letterSpacing: "0.4px", fontWeight: 700 }}>Find Your Booking</h3>
-              <button type="button" onClick={() => {setShowLookup(false); setFoundBooking(null);}} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "18px" }}>❌</button>
+              <button type="button" onClick={() => { setShowLookup(false); setFoundBooking(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "18px" }}>❌</button>
             </div>
 
             {!foundBooking ? (
               <div>
                 <label style={labelStyle}>Booking Reference (e.g., BK-123456)</label>
-                <input type="text" value={lookupRef} onChange={e => setLookupRef(e.target.value)} style={{...inputStyle, width: "100%", marginBottom: "15px"}} />
-                
+                <input type="text" value={lookupRef} onChange={e => setLookupRef(e.target.value)} style={{ ...inputStyle, width: "100%", marginBottom: "15px" }} />
+
                 <label style={labelStyle}>Phone Number</label>
-                <input type="text" value={lookupPhone} onChange={e => setLookupPhone(e.target.value)} style={{...inputStyle, width: "100%", marginBottom: "20px"}} />
-                
-                <button type="button" onClick={handleLookupBooking} style={{...primaryButtonStyle, width: "100%"}}>Search</button>
+                <input type="text" value={lookupPhone} onChange={e => setLookupPhone(e.target.value)} style={{ ...inputStyle, width: "100%", marginBottom: "20px" }} />
+
+                <button type="button" onClick={handleLookupBooking} style={{ ...primaryButtonStyle, width: "100%" }}>Search</button>
               </div>
             ) : (
               <div style={{
@@ -738,10 +901,10 @@ const handleSendMessage = async () => {
                 gap: "16px",
                 alignItems: "start"
               }}>
-                <div style={{ 
-                  backgroundColor: "rgba(255,255,255,0.7)", 
-                  padding: "20px", 
-                  borderRadius: "12px", 
+                <div style={{
+                  backgroundColor: "rgba(255,255,255,0.7)",
+                  padding: "20px",
+                  borderRadius: "12px",
                   color: "#0b1220",
                   fontSize: "15px",
                   lineHeight: "1.7",
@@ -759,21 +922,21 @@ const handleSendMessage = async () => {
                   <p style={{ margin: "6px 0 12px 0", color: "#1f2937" }}><strong style={{ color: "#0b1220" }}>Check-out:</strong> {new Date(foundBooking.check_out_date).toLocaleDateString()}</p>
                   {foundBooking.booking_status === 'confirmed' && (
                     <button type="button"
-                      onClick={handleCancelBooking} 
-                      style={{...secondaryButtonStyle, width: "100%", marginTop: "15px", color: "#dc2626", borderColor: "#fca5a5", backgroundColor: "#fef2f2"}}
+                      onClick={handleCancelBooking}
+                      style={{ ...secondaryButtonStyle, width: "100%", marginTop: "15px", color: "#dc2626", borderColor: "#fca5a5", backgroundColor: "#fef2f2" }}
                     >
                       ⚠️ Cancel Booking
                     </button>
                   )}
 
-                  <button type="button" onClick={() => setFoundBooking(null)} style={{...secondaryButtonStyle, width: "100%", marginTop: "10px"}}>Close Receipt</button>
-                  <button type="button" onClick={() => {setFoundBooking(null); setRatingHotelId(null);}} style={{...secondaryButtonStyle, width: "100%", marginTop: "15px"}}>Back to Search</button>
+                  <button type="button" onClick={() => setFoundBooking(null)} style={{ ...secondaryButtonStyle, width: "100%", marginTop: "10px" }}>Close Receipt</button>
+                  <button type="button" onClick={() => { setFoundBooking(null); setRatingHotelId(null); }} style={{ ...secondaryButtonStyle, width: "100%", marginTop: "15px" }}>Back to Search</button>
                 </div>
 
-                <div style={{ 
-                  backgroundColor: "rgba(255,255,255,0.7)", 
-                  padding: "20px", 
-                  borderRadius: "12px", 
+                <div style={{
+                  backgroundColor: "rgba(255,255,255,0.7)",
+                  padding: "20px",
+                  borderRadius: "12px",
                   color: "#0b1220",
                   fontSize: "15px",
                   lineHeight: "1.6",
@@ -822,16 +985,16 @@ const handleSendMessage = async () => {
 
 // --- REUSABLE STYLES ---
 const labelStyle = {
-  display: "block", 
-  fontSize: "14px", 
-  fontWeight: "bold", 
+  display: "block",
+  fontSize: "14px",
+  fontWeight: "bold",
   marginBottom: "8px",
   color: "#0b1220"
 };
 
 const inputStyle = {
-  padding: "10px", 
-  borderRadius: "8px", 
+  padding: "10px",
+  borderRadius: "8px",
   border: "1px solid #d1d5db",
   boxSizing: "border-box",
   backgroundColor: "#ffffff",
@@ -839,42 +1002,42 @@ const inputStyle = {
 };
 
 const primaryButtonStyle = {
-  padding: "10px 20px", 
-  backgroundColor: "#2563eb", 
-  color: "white", 
-  border: "none", 
-  borderRadius: "6px", 
-  fontSize: "16px", 
-  fontWeight: "bold", 
+  padding: "10px 20px",
+  backgroundColor: "#2563eb",
+  color: "white",
+  border: "none",
+  borderRadius: "6px",
+  fontSize: "16px",
+  fontWeight: "bold",
   cursor: "pointer"
 };
 
 const secondaryButtonStyle = {
-  padding: "10px 20px", 
-  backgroundColor: "white", 
-  color: "#4b5563", 
-  border: "1px solid #d1d5db", 
-  borderRadius: "6px", 
-  fontSize: "16px", 
-  fontWeight: "bold", 
+  padding: "10px 20px",
+  backgroundColor: "white",
+  color: "#4b5563",
+  border: "1px solid #d1d5db",
+  borderRadius: "6px",
+  fontSize: "16px",
+  fontWeight: "bold",
   cursor: "pointer"
 };
 
 export default HotelPage;
-  const RatingStars = ({ value, onChange }) => (
-    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-      {[1,2,3,4,5].map((n) => (
-        <span
-          key={n}
-          onClick={() => onChange(n)}
-          style={{
-            cursor: "pointer",
-            fontSize: "22px",
-            color: n <= value ? colors.accent : "rgba(0,0,0,0.25)"
-          }}
-        >
-          ★
-        </span>
-      ))}
-    </div>
-  );
+const RatingStars = ({ value, onChange }) => (
+  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+    {[1, 2, 3, 4, 5].map((n) => (
+      <span
+        key={n}
+        onClick={() => onChange(n)}
+        style={{
+          cursor: "pointer",
+          fontSize: "22px",
+          color: n <= value ? colors.accent : "rgba(0,0,0,0.25)"
+        }}
+      >
+        ★
+      </span>
+    ))}
+  </div>
+);

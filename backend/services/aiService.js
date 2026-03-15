@@ -1,16 +1,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-// HuggingFace Inference API Configuration (optional LLM fallback)
-const HF_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
-const HF_MODEL = process.env.HF_MODEL || "meta-llama/Llama-2-7b-chat-hf";
-// HF recommends using the router endpoint (api-inference is deprecated)
-const HF_FALLBACK_MODEL = process.env.HF_FALLBACK_MODEL || "bigscience/bloomz-560m"; // open by default
-const HF_EMERGENCY_OPEN_MODEL = "gpt2"; // last-resort open model
+// Groq Inference API Configuration
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"; 
+const GROQ_FALLBACK_MODEL = "openai/gpt-oss-120b";
 
-// Soft circuit-breaker so we don't spam logs if HF keeps failing
-let hfDisabledUntil = 0;
-const HF_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+// Soft circuit-breaker
+let groqDisabledUntil = 0;
+const GROQ_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 
 // --- CACHE UTILITIES ---
 const cache = new Map();
@@ -89,48 +87,60 @@ async function fetchWithTimeout(url, options, timeoutMs = 6000) {
 }
 
 async function callLLM(query, hotelContext, attempt = 1, modelOverride = null) {
-  if (!HF_API_TOKEN) return null;
-  if (Date.now() < hfDisabledUntil) return null;
+  if (!GROQ_API_KEY) return null;
+  if (Date.now() < groqDisabledUntil) return null;
 
-  const modelToUse = modelOverride || HF_MODEL;
+  const modelToUse = modelOverride || GROQ_MODEL;
 
   const hotelInfo = hotelContext
     ? `Hotel: ${hotelContext.hotel_name || "Unknown"} (${hotelContext.location || "Unknown"})`
     : "Hotel: (not provided)";
 
   const roomInfo = (hotelContext?.rooms || [])
-    .map(r => `${r.type}: ₹${r.price}/night (${r.available} available)`)
-    .join(", ");
+    .map(r => `${r.type}: ₹${r.price}/night | Cap: ${r.capacity} | Features: ${r.amenities} | About: ${r.description} (${r.available} available)`)
+    .join("\n");
 
   const datesInfo = hotelContext?.target_check_in
     ? `Dates: ${hotelContext.target_check_in || "N/A"} to ${hotelContext.target_check_out || "N/A"}`
     : "Dates: not selected";
 
-  const systemContext = `You are a concise, friendly hotel assistant. Use only the facts provided.\n${hotelInfo}\n${datesInfo}\nRooms: ${roomInfo || "No room data"}\nKeep answers short (1-3 sentences) and helpful.`;
+  const descriptionInfo = hotelContext?.description ? `About: ${hotelContext.description}` : "";
+  const addressInfo = hotelContext?.address ? `Location/Address: ${hotelContext.address}` : "";
+  const mapsInfo = hotelContext?.google_maps ? `Google Maps: ${hotelContext.google_maps}` : "";
+  const amenitiesInfo = hotelContext?.amenities ? `Amenities/Spots: ${hotelContext.amenities}` : "";
+  const contactInfo = hotelContext?.contact ? `Contact: ${hotelContext.contact}` : "";
 
-  const prompt = `${systemContext}\n\nGuest: ${query}\nAssistant:`;
+  const systemContext = `You are a concise, friendly hotel assistant. Use only the facts provided.
+${hotelInfo}
+${descriptionInfo}
+${addressInfo}
+${mapsInfo}
+${amenitiesInfo}
+${contactInfo}
+${datesInfo}
+Rooms: ${roomInfo || "No room data"}
+Keep answers short (1-3 sentences) and helpful. If a user asks about nearby spots, mention what's clearly described in the Info or Amenities. If they ask about "goodies", "facilities", or "features", explicitly list the Cap, Features, and About details of the available rooms.`;
+
+  console.log("=== GROQ SYSTEM PROMPT ===\n", systemContext, "\n==========================");
 
   const body = {
-    inputs: prompt,
-    parameters: {
-      max_new_tokens: 180,
-      temperature: 0.5,
-      top_p: 0.95,
-      return_full_text: false
-    },
-    options: {
-      wait_for_model: false,
-      use_cache: true
-    }
+    model: modelToUse,
+    messages: [
+      { role: "system", content: systemContext },
+      { role: "user", content: query }
+    ],
+    max_tokens: 180,
+    temperature: 0.5,
+    top_p: 0.95
   };
 
   try {
-    const apiUrl = `https://router.huggingface.co/models/${modelToUse}`;
+    const apiUrl = `https://api.groq.com/openai/v1/chat/completions`;
 
     const resp = await fetchWithTimeout(apiUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${HF_API_TOKEN}`,
+        Authorization: `Bearer ${GROQ_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(body)
@@ -138,40 +148,27 @@ async function callLLM(query, hotelContext, attempt = 1, modelOverride = null) {
 
     if (!resp.ok) {
       const text = await resp.text();
-      console.error(`HuggingFace API error ${resp.status}: ${text}`);
+      console.error(`Groq API error ${resp.status}: ${text}`);
 
-      // If model not found or gated, try the fallback(s)
-      if ((resp.status === 404 || resp.status === 403) && attempt === 1 && HF_FALLBACK_MODEL) {
-        console.warn(`Retrying with fallback model: ${HF_FALLBACK_MODEL}`);
-        return await callLLM(query, hotelContext, attempt + 1, HF_FALLBACK_MODEL);
-      }
-      if ((resp.status === 404 || resp.status === 403) && attempt === 2) {
-        console.warn(`Retrying with open model: ${HF_EMERGENCY_OPEN_MODEL}`);
-        return await callLLM(query, hotelContext, attempt + 1, HF_EMERGENCY_OPEN_MODEL);
+      if (attempt === 1 && GROQ_FALLBACK_MODEL) {
+        console.warn(`Retrying with fallback model: ${GROQ_FALLBACK_MODEL}`);
+        return await callLLM(query, hotelContext, attempt + 1, GROQ_FALLBACK_MODEL);
       }
 
-      // After retries, disable HF for a while to prevent log spam
       if (attempt >= 2) {
-        hfDisabledUntil = Date.now() + HF_COOLDOWN_MS;
-        console.warn(`Disabling HuggingFace calls for 30 minutes due to repeated ${resp.status}`);
+        groqDisabledUntil = Date.now() + GROQ_COOLDOWN_MS;
+        console.warn(`Disabling Groq calls for 30 minutes due to repeated ${resp.status}`);
       }
       return null;
     }
 
     const data = await resp.json();
-    let reply = "";
-    if (Array.isArray(data)) {
-      reply = data[0]?.generated_text || "";
-    } else if (data?.generated_text) {
-      reply = data.generated_text;
-    } else if (data?.choices?.length) {
-      reply = data.choices[0].message?.content || data.choices[0].text || "";
-    }
+    let reply = data.choices?.[0]?.message?.content || "";
     if (!reply) return null;
 
     return { intent: "general_llm", response: reply };
   } catch (err) {
-    console.error("HuggingFace fetch failed:", err.message);
+    console.error("Groq fetch failed:", err.message);
     return null;
   }
 }
@@ -616,7 +613,6 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
     state.pay_on_arrival = false;
   }
 
-  // Extract Name (allow even if phone already provided)
   if (state.adults !== null && !state.guest_name) {
     const hasLetters = /[a-zA-Z]/.test(text);
     const looksNumericList = /^(\d+\s*(and|,|&)\s*)*\d+$/i.test(text);
@@ -626,6 +622,15 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
         state.guest_name = nameStr;
       }
     }
+  }
+
+  // Explicitly catch "I want to book" phrases and typical affirmative answers like "yes please"
+  const isBookingWord = ["book", "reserve", "reservation", "i want a room"].some(w => text.includes(w));
+  const isAffirmative = /^(yes|yeah|yup|sure|ok|okay|please)(\s+(please|thanks|thank you|book|reserve|i do))?$/i.test(text.trim());
+  const isBookingIntent = isBookingWord || isAffirmative;
+  
+  if (isBookingIntent) {
+    intent = "booking_started";
   }
 
   // ==========================================
@@ -673,7 +678,17 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
     !state.guest_name &&
     !state.guest_phone;
 
+  // 🚨 NEW: If they said "book", the intent is "booking_started" and we MUST ask the first missing question.
+  // We skip the LLM entirely for this so the deterministic flow takes over smoothly.
   if (intent === "conversational" && noProgress) {
+    console.log("🤖 Triggering Groq API for conversational query:", query);
+    const llmResult = await callLLM(query, hotelContext);
+    
+    if (llmResult && llmResult.response) {
+      return { intent: "ai_answered", response: llmResult.response, chatState: state };
+    }
+
+    // If Groq fails or times out, use the deterministic fallback
     const fallbackCount = (state.fallback_hits || 0) + 1;
     state.fallback_hits = fallbackCount;
 
