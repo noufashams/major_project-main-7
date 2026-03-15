@@ -3,6 +3,7 @@ import React from "react";
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
+import { useRef } from "react";
 
 function HotelPage() {
   const { slug } = useParams();
@@ -50,6 +51,11 @@ function HotelPage() {
   const [chatHistory, setChatHistory] = useState([
     { sender: "ai", text: "Hi! I'm the AI Receptionist. How can I help you with your booking?" }
   ]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [canUseSpeech, setCanUseSpeech] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const recognitionRef = useRef(null);
+  const synthRef = useRef(window.speechSynthesis || null);
 
   // 4. Voice State
   const [isListening, setIsListening] = useState(false);
@@ -80,6 +86,28 @@ function HotelPage() {
   useEffect(() => {
     fetchHotelData();
   }, [slug, checkIn, checkOut]);
+
+  // Set up Web Speech API availability
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.lang = "en-US";
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+      recognitionRef.current = rec;
+      setCanUseSpeech(true);
+    }
+  }, []);
+
+  const speak = (text) => {
+    if (!ttsEnabled || !synthRef.current || !text) return;
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "en-US";
+    utter.rate = 1;
+    synthRef.current.cancel();
+    synthRef.current.speak(utter);
+  };
 
   const renderStars = (value) => {
     const v = Math.round(value || 0);
@@ -297,13 +325,23 @@ function HotelPage() {
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
     recognition.onerror = () => setIsListening(false);
     recognition.onresult = (event) => {
       const transcript = Array.from(event.results)
         .map(r => r[0].transcript)
         .join("");
       setChatInput(transcript);
+    };
+    // Auto-send when user stops speaking
+    recognition.onend = () => {
+      setIsListening(false);
+      setTimeout(() => {
+        // Use a ref-captured value so we can read the latest chatInput
+        setChatInput(prev => { 
+          if (prev.trim()) handleSendMessage(prev);
+          return prev;
+        });
+      }, 200);
     };
     recognition.start();
     recognitionRef.current = recognition;
@@ -315,7 +353,7 @@ function HotelPage() {
   };
 
   const speakText = (text, msgIndex) => {
-    if (!text || isSpeaking) return;
+    if (!text || isSpeaking || !ttsEnabled) return;
     if (!window.speechSynthesis) { console.warn("Speech synthesis not supported"); return; }
 
     window.speechSynthesis.cancel(); // stop any current speech
@@ -390,7 +428,7 @@ function HotelPage() {
       const newAiMsgIndex = newHistory.length; // index of the new AI message
       setChatHistory([...newHistory, { sender: "ai", text: res.data.reply }]);
 
-      // Auto-speak the AI response
+      // Auto-speak the AI response (only if TTS is enabled)
       speakText(res.data.reply, newAiMsgIndex);
 
       // THE MAGIC HANDOFF:
@@ -765,12 +803,45 @@ function HotelPage() {
               })}
             </div>
 
-            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+              {/* Mic button - tap to toggle */}
+              <button
+                onClick={() => {
+                  if (isListening) {
+                    stopListening();
+                  } else {
+                    startListening();
+                  }
+                }}
+                title={isListening ? "Stop listening" : "Tap to speak"}
+                style={{
+                  padding: "10px 12px",
+                  backgroundColor: isListening ? "#ef4444" : "#374151",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "18px",
+                  transition: "background-color 0.2s",
+                  animation: isListening ? "pulse 1s infinite" : "none"
+                }}
+              >
+                {isListening ? "■" : "🎤"}
+              </button>
+              {/* TTS toggle */}
+              <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", color: "#4b5563", cursor: "pointer", whiteSpace: "nowrap" }}>
+                <input
+                  type="checkbox"
+                  checked={ttsEnabled}
+                  onChange={(e) => setTtsEnabled(e.target.checked)}
+                  style={{ cursor: "pointer" }}
+                />
+                🔊 Read replies
+              </label>
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                 placeholder={isListening ? "🎙️ Listening..." : "Ask about rooms or book..."}
                 style={{
                   flex: 1,
