@@ -1687,7 +1687,8 @@ app.post("/api/guest/query", async (req, res) => {
 
   try {
     const hotelResult = await db.query(
-      `SELECT hotel_id, hotel_name, location FROM hotels WHERE hotel_id = $1`,
+      `SELECT hotel_id, hotel_name, location, description, address, google_maps_url, contact_phone, contact_email 
+       FROM hotels WHERE hotel_id = $1`,
       [hotel_id]
     );
 
@@ -1695,6 +1696,8 @@ app.post("/api/guest/query", async (req, res) => {
 
     const roomsResult = await db.query(
       `SELECT r.room_id, r.room_type as type, COALESCE(o.custom_price, r.price_per_night) as price,
+              r.description, r.capacity,
+              (SELECT string_agg(amenity_name, ', ') FROM room_amenities WHERE room_id = r.room_id) AS room_amenities,
               r.total_rooms - COALESCE(
                   (SELECT SUM(number_of_rooms) FROM bookings b 
                    WHERE b.room_id = r.room_id AND b.booking_status = 'confirmed' 
@@ -1705,24 +1708,38 @@ app.post("/api/guest/query", async (req, res) => {
        WHERE r.hotel_id = $1`,
       [hotel_id, safeCheckIn, safeCheckOut] 
     );
+    
+    // Fetch amenities for this hotel
+    const amenitiesResult = await db.query(
+      `SELECT DISTINCT amenity_name FROM room_amenities WHERE room_id IN (SELECT room_id FROM rooms WHERE hotel_id = $1)`,
+      [hotel_id]
+    );
+    const hotelAmenities = amenitiesResult.rows.map(a => a.amenity_name).join(", ");
 
-    // --- NEW: Pass the date flags to the AI ---
-   // 3. Build Hotel Context for AI
+    // 3. Build Hotel Context for AI
+    const hotelInfo = hotelResult.rows[0];
     const hotelContext = {
       hotel_id: hotel_id,
-      hotel_name: hotelResult.rows[0].hotel_name,
-      location: hotelResult.rows[0].location,
+      hotel_name: hotelInfo.hotel_name,
+      location: hotelInfo.location,
+      description: hotelInfo.description || "",
+      address: hotelInfo.address || "",
+      google_maps: hotelInfo.google_maps_url || "",
+      contact: `${hotelInfo.contact_phone || ""} | ${hotelInfo.contact_email || ""}`,
+      amenities: hotelAmenities || "Standard hotel amenities",
       target_check_in: check_in,
       target_check_out: check_out,
       
-      // 🚨 FIX: THIS TELLS THE AI IF THE GUEST USED THE CALENDAR YET!
       datesProvided: (req.body.check_in && req.body.check_out) ? true : false, 
       
       rooms: roomsResult.rows.map(r => ({
         room_id: r.room_id,
         type: r.type,
         price: parseInt(r.price),
-        available: Math.max(0, parseInt(r.available))
+        available: Math.max(0, parseInt(r.available)),
+        description: r.description || "",
+        capacity: parseInt(r.capacity) || 2,
+        amenities: r.room_amenities || "Standard amenities"
       }))
     };
 
@@ -2024,7 +2041,6 @@ app.get("/api/pricing/history", verifyToken, async (req, res) => {
     res.status(500).json({ message: "Failed to get history" });
   }
 });
-
 
 httpServer.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
