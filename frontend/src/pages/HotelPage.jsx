@@ -43,6 +43,10 @@ function HotelPage() {
   const [foundBooking, setFoundBooking] = useState(null);
   // lightbox state (room id + photo index)
   const [lightbox, setLightbox] = useState({ roomId: null, index: 0 });
+  // Reviews modal
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [showMap, setShowMap] = useState(false);
 
 
   // 3. AI Chatbot State
@@ -485,12 +489,22 @@ function HotelPage() {
 
       {/* WHITE-LABEL HERO SECTION */}
       <header style={{ backgroundColor: "rgba(255,255,255,0.55)", backdropFilter: "blur(10px)", color: colors.text, padding: "60px 20px", textAlign: "center", borderBottom: `1px solid ${colors.border}` }}>
-        <button
-          onClick={() => setShowLookup(true)}
-          style={{ position: "absolute", top: "20px", right: "20px", background: "rgba(255,255,255,0.35)", color: colors.text, border: `1px solid ${colors.border}`, padding: "8px 16px", borderRadius: "10px", cursor: "pointer", backdropFilter: "blur(6px)" }}
-        >
-          🔍 Manage Booking
-        </button>
+        <div style={{ position: "absolute", top: "20px", right: "20px", display: "flex", gap: "10px" }}>
+          <button
+            onClick={() => setShowLookup(true)}
+            style={{ background: "rgba(255,255,255,0.35)", color: colors.text, border: `1px solid ${colors.border}`, padding: "8px 16px", borderRadius: "10px", cursor: "pointer", backdropFilter: "blur(6px)" }}
+          >
+            🔍 Manage Booking
+          </button>
+          {hotel.google_maps_url && (
+            <button
+              onClick={() => window.open(hotel.google_maps_url, "_blank", "noopener")}
+              style={{ background: "rgba(255,255,255,0.35)", color: colors.text, border: `1px solid ${colors.border}`, padding: "8px 12px", borderRadius: "10px", cursor: "pointer", backdropFilter: "blur(6px)" }}
+            >
+              📍 View Map
+            </button>
+          )}
+        </div>
         <h1 style={{
           fontSize: "48px",
           margin: "0 0 10px 0",
@@ -507,31 +521,31 @@ function HotelPage() {
             📞 <a href={`tel:${hotel.contact_phone}`} style={{ color: "#111827", textDecoration: "none" }}>{hotel.contact_phone}</a>
           </p>
         )}
-        <p style={{ margin: "8px 0 0 0", color: "#111827", fontSize: "16px", fontWeight: 700 }}>
-          ⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)
+        <p style={{ margin: "8px 0 0 0", color: "#111827", fontSize: "16px", fontWeight: 700, display: "flex", gap: "10px", alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+          <span>⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)</span>
+          <button
+            type="button"
+            onClick={() => setReviewModalOpen(true)}
+            style={{
+              border: "1px solid rgba(0,0,0,0.1)",
+              background: "rgba(255,255,255,0.65)",
+              color: "#0f172a",
+              borderRadius: "999px",
+              padding: "6px 12px",
+              cursor: "pointer",
+              fontWeight: 700,
+              fontSize: "12px",
+              boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+              backdropFilter: "blur(6px)"
+            }}
+          >
+            View reviews
+          </button>
         </p>
       </header>
 
       <main style={{ maxWidth: "1000px", margin: "40px auto", padding: "0 20px" }}>
         {/* Map */}
-        {hotel.google_maps_url && (
-          <section style={{ background: "rgba(255,255,255,0.78)", padding: "16px", borderRadius: "16px", border: "1px solid rgba(0,0,0,0.05)", marginBottom: "24px", backdropFilter: "blur(16px)", boxShadow: "0 24px 60px rgba(0,0,0,0.14)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-              <h2 style={{ margin: 0, color: colors.text }}>Location</h2>
-              <a href={hotel.google_maps_url} target="_blank" rel="noreferrer" style={{ color: colors.accent, fontWeight: "600" }}>Open in Google Maps</a>
-            </div>
-            <div style={{ position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
-              <iframe
-                title="Hotel map"
-                src={buildEmbedSrc()}
-                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
-                allowFullScreen
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
-            </div>
-          </section>
-        )}
 
         {/* Ratings removed from public view; now only after booking lookup */}
 
@@ -735,6 +749,92 @@ function HotelPage() {
         );
       })()}
 
+      {/* Reviews modal */}
+      {reviewModalOpen && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          backgroundColor: "rgba(0,0,0,0.65)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+          zIndex: 2100
+        }}>
+          <div style={{
+            width: "600px",
+            maxHeight: "80vh",
+            overflow: "hidden",
+            background: "rgba(255,255,255,0.9)",
+            border: "1px solid rgba(0,0,0,0.06)",
+            borderRadius: "16px",
+            boxShadow: "0 24px 60px rgba(0,0,0,0.35)",
+            display: "flex",
+            flexDirection: "column",
+            backdropFilter: "blur(12px)"
+          }}>
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(0,0,0,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", color: "#0f172a" }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>{hotel.hotel_name}</div>
+                <div style={{ fontSize: "12px", color: "#475569" }}>
+                  {hotel.location} • {ratings.length} review{ratings.length === 1 ? "" : "s"}
+                </div>
+              </div>
+              <button onClick={() => setReviewModalOpen(false)} style={{ background: "none", border: "none", color: "#0f172a", cursor: "pointer", fontSize: "20px" }}>×</button>
+            </div>
+
+            <div style={{ padding: "10px 16px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
+              <span style={{ fontSize: "13px", color: "#475569" }}>Filter by rating:</span>
+              {["all", "5", "4", "3"].map(opt => (
+                <button
+                  key={opt}
+                  onClick={() => setReviewFilter(opt)}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: "12px",
+                    border: `1px solid ${reviewFilter === opt ? "rgba(37,99,235,0.7)" : "rgba(0,0,0,0.08)"}`,
+                    background: reviewFilter === opt ? "rgba(37,99,235,0.12)" : "rgba(255,255,255,0.8)",
+                    color: "#0f172a",
+                    cursor: "pointer",
+                    fontWeight: 600
+                  }}
+                >
+                  {opt === "all" ? "All" : `${opt}★ & up`}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px", background: "rgba(248,250,252,0.8)" }}>
+              {ratings.filter(r => {
+                const v = Number(r.rating || 0);
+                if (reviewFilter === "5") return v >= 5;
+                if (reviewFilter === "4") return v >= 4;
+                if (reviewFilter === "3") return v >= 3;
+                return true;
+              }).map((r, idx) => (
+                <div key={idx} style={{
+                  background: "white",
+                  border: "1px solid rgba(0,0,0,0.05)",
+                  borderRadius: "12px",
+                  padding: "12px",
+                  color: "#0f172a",
+                  marginBottom: "10px",
+                  boxShadow: "0 10px 24px rgba(15,23,42,0.08)"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <strong>{r.guest_name || "Anonymous"}</strong>
+                    <span style={{ color: "#b45309", fontWeight: 700 }}>★ {Number(r.rating || 0).toFixed(1)}</span>
+                  </div>
+                  {r.comment && <p style={{ margin: "8px 0 0", color: "#334155", lineHeight: 1.5 }}>{r.comment}</p>}
+                </div>
+              ))}
+              {ratings.length === 0 && (
+                <p style={{ color: "#64748b", margin: 0 }}>No reviews yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {/* FLOATING AI CHATBOT WIDGET */}
       <div style={{ position: "fixed", bottom: "20px", right: "20px", zIndex: 1000 }} >
         {isChatOpen ? (
@@ -838,6 +938,12 @@ function HotelPage() {
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
                 placeholder={isListening ? "Listening..." : "Ask about rooms or book..."}
                 style={{
                   flex: 1,

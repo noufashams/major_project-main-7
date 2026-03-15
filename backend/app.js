@@ -197,7 +197,7 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
     await db.query("BEGIN"); // Start transaction
 
     const roomCheck = await db.query(
-      "SELECT total_rooms, room_type FROM rooms WHERE room_id = $1 AND hotel_id = $2 FOR UPDATE",
+      "SELECT total_rooms, room_type, capacity FROM rooms WHERE room_id = $1 AND hotel_id = $2 FOR UPDATE",
       [room_id, hotel_id]
     );
 
@@ -207,6 +207,7 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
     }
 
     const totalRooms = roomCheck.rows[0].total_rooms;
+    const roomCapacity = roomCheck.rows[0].capacity || 0;
 
     const overlapCheck = await db.query(
       `SELECT SUM(number_of_rooms) as booked_count 
@@ -221,6 +222,13 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
     if (actualAvailable <= 0 || number_of_rooms > actualAvailable) {
       await db.query("ROLLBACK");
       return res.status(400).json({ message: "Not enough rooms available for these dates." });
+    }
+
+    // Enforce capacity: total guests must not exceed capacity * rooms booked
+    const totalGuests = (parseInt(adults) || 0) + (parseInt(children) || 0);
+    if (roomCapacity > 0 && totalGuests > roomCapacity * number_of_rooms) {
+      await db.query("ROLLBACK");
+      return res.status(400).json({ message: `Room capacity exceeded. Max ${roomCapacity * number_of_rooms} guests for this booking.` });
     }
 
     // --- NEW: GENERATE THE FAKE PAYMENT ID & REAL BOOKING REF ---
@@ -710,6 +718,89 @@ res.json({
   }
 });
 
+// Staff: fetch own hotel profile
+app.get("/api/staff/hotel", verifyToken, async (req, res) => {
+  const hotelId = req.user?.hotel_id;
+  if (!hotelId) return res.status(403).json({ message: "Unauthorized" });
+
+  try {
+    const result = await db.query(
+      `SELECT hotel_id, hotel_name, location, address, google_maps_url,
+              contact_phone, contact_email, description, slug, is_verified
+       FROM hotels
+       WHERE hotel_id = $1`,
+      [hotelId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: "Hotel not found" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Staff hotel fetch error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Staff: update own hotel profile
+app.put("/api/staff/hotel", verifyToken, async (req, res) => {
+  const hotelId = req.user?.hotel_id;
+  if (!hotelId) return res.status(403).json({ message: "Unauthorized" });
+
+  const {
+    hotel_name,
+    location,
+    address,
+    google_maps_url,
+    contact_phone,
+    contact_email,
+    description
+  } = req.body;
+
+  try {
+    const current = await db.query(
+      `SELECT hotel_name, location, address, google_maps_url,
+              contact_phone, contact_email, description, slug
+       FROM hotels WHERE hotel_id = $1`,
+      [hotelId]
+    );
+    if (current.rows.length === 0) return res.status(404).json({ message: "Hotel not found" });
+    const existing = current.rows[0];
+
+    const finalName = hotel_name ?? existing.hotel_name;
+    const finalLoc = location ?? existing.location;
+    const newSlug = `${finalName}-${finalLoc}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+    const result = await db.query(
+      `UPDATE hotels
+       SET hotel_name = $1,
+           location = $2,
+           address = $3,
+           google_maps_url = $4,
+           contact_phone = $5,
+           contact_email = $6,
+           description = $7,
+           slug = $8
+       WHERE hotel_id = $9
+       RETURNING hotel_id, hotel_name, location, address, google_maps_url,
+                 contact_phone, contact_email, description, slug, is_verified`,
+      [
+        finalName,
+        finalLoc,
+        address ?? existing.address,
+        google_maps_url ?? existing.google_maps_url,
+        contact_phone ?? existing.contact_phone,
+        contact_email ?? existing.contact_email,
+        description ?? existing.description,
+        newSlug,
+        hotelId
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Staff hotel update error:", err);
+    res.status(500).json({ message: "Server error updating hotel" });
+  }
+});
+
 // ADMIN AUTH (env-based)
 app.post("/api/admin/login", async (req, res) => {
   const { email, password } = req.body;
@@ -1101,7 +1192,7 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     // 1️⃣ CORE METRICS (Current Period)
     const coreMetrics = await db.query(
       `WITH stay_dates AS (
-         SELECT b.booking_id, b.booking_status,
+         SELECT b.booking_id, b.booking_status, b.payment_status,
                 r.price_per_night,
                 COALESCE(b.number_of_rooms, 1) AS rooms,
                 generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
@@ -1111,7 +1202,7 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
        )
        SELECT 
          COUNT(DISTINCT booking_id) FILTER (WHERE booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3) AS confirmed_bookings,
-         COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN price_per_night * rooms END), 0) AS total_revenue,
+         COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND payment_status = 'paid' AND stay_date >= $2 AND stay_date < $3 THEN price_per_night * rooms END), 0) AS total_revenue,
          COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN rooms END), 0) AS room_nights,
          COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN 1 END), 0) AS booking_nights
        FROM stay_dates`,

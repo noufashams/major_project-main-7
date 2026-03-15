@@ -1,10 +1,42 @@
 import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useRef } from "react";
 
 function LandingPage() {
   const navigate = useNavigate();
+  const [showFeatures, setShowFeatures] = useState(false);
+  const featuresRef = useRef(null);
+
+  // Reveal features when the section enters the viewport
+  useEffect(() => {
+    const target = featuresRef.current;
+    if (!target) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setShowFeatures(true);
+            observer.disconnect();
+          }
+        });
+      },
+      { threshold: 0.2 }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, []);
+
+  const backgroundImage = "url('https://images.unsplash.com/photo-1445019980597-93fa8acb246c?auto=format&fit=crop&w=1920&q=80')";
 
   return (
-    <div style={{ color: "var(--text)", background: "var(--bg)", minHeight: "100vh" }}>
+    <div style={{
+      color: "var(--text)",
+      minHeight: "100vh",
+      backgroundImage: `linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.65) 50%, rgba(0,0,0,0.75) 100%), ${backgroundImage}`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      backgroundAttachment: "fixed"
+    }}>
       
       {/* --- NAVIGATION BAR --- */}
       <nav style={{ 
@@ -47,21 +79,18 @@ function LandingPage() {
       {/* --- HERO SECTION --- */}
       <header style={{ 
         position: "relative",
-        padding: "140px 24px 160px",
+        padding: "120px 24px 120px",
         overflow: "hidden",
-        minHeight: "100vh",
-        backgroundImage: "linear-gradient(180deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.55) 60%, rgba(0,0,0,0.75) 100%), url('https://images.unsplash.com/photo-1445019980597-93fa8acb246c?auto=format&fit=crop&w=1920&q=80')",
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundRepeat: "no-repeat"
+        minHeight: "75vh",
+        backgroundImage: "linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.35) 40%, rgba(0,0,0,0.1) 100%)"
       }}>
-        <div style={{ position: "relative", maxWidth: "960px", margin: "0 auto", textAlign: "center" }}>
-          <p style={{ letterSpacing: "6px", textTransform: "uppercase", color: "var(--muted)", marginBottom: "10px" }}>Smart Hospitality AI Platform</p>
-          <h1 style={{ fontSize: "64px", lineHeight: "1.05", margin: "0 0 20px 0" }}>
-            Build the stay you’d pin forever.
+        <div style={{ position: "relative", maxWidth: "960px", margin: "0 auto", textAlign: "center", transform: "translateY(10vh)" }}>
+          <p style={{ letterSpacing: "6px", textTransform: "uppercase", color: "var(--muted)", marginBottom: "10px", fontFamily: "'Playfair Display','Cinzel','Georgia',serif" }}>SMART HOSPITALITY AI PLATFORM</p>
+          <h1 style={{ fontSize: "44px", lineHeight: "1.08", margin: "0 0 18px 0", textTransform: "uppercase", fontFamily: "'Playfair Display','Cinzel','Georgia',serif", letterSpacing: "0.5px" }}>
+            BUILD THE STAY YOU’D PIN FOREVER.
           </h1>
-          <p style={{ fontSize: "20px", color: "var(--muted)", margin: "0 0 32px 0", maxWidth: "760px", marginInline: "auto" }}>
-            A luxury-grade booking experience with AI-driven pricing, concierge chat, and stunning storytelling for your independent hotels.
+          <p style={{ fontSize: "20px", color: "var(--muted)", margin: "0 0 32px 0", maxWidth: "760px", marginInline: "auto", textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Playfair Display','Cinzel','Georgia',serif" }}>
+            SMART RATES. SEAMLESS CHAT. STUNNING STAYS.
           </p>
           <div style={{ display: "flex", justifyContent: "center", gap: "14px", flexWrap: "wrap" }}>
             <button 
@@ -80,10 +109,21 @@ function LandingPage() {
       </header>
 
       {/* --- VALUE PROP / FEATURES SECTION --- */}
-      <section style={{ padding: "80px 50px", maxWidth: "1200px", margin: "0 auto" }}>
+      <section
+        ref={featuresRef}
+        style={{
+          padding: "80px 50px",
+          paddingTop: "200px",
+          maxWidth: "1200px",
+          margin: "0 auto",
+          opacity: showFeatures ? 1 : 0,
+          transform: showFeatures ? "translateY(0)" : "translateY(40px)",
+          transition: "opacity 0.5s ease, transform 0.5s ease"
+        }}
+      >
         <div style={{ textAlign: "center", marginBottom: "40px" }}>
-          <p style={{ letterSpacing: "5px", textTransform: "uppercase", color: "var(--muted)", margin: "0 0 6px 0" }}>Why InnGo</p>
-          <h2 style={{ fontSize: "36px", margin: 0 }}>Designed for Boutique Originals</h2>
+          <p style={{ letterSpacing: "5px", textTransform: "uppercase", color: "#cbd5e1", margin: "0 0 6px 0" }}>Why InnGo</p>
+          <h2 style={{ fontSize: "36px", margin: 0, color: "#f8fafc" }}>Designed for Boutique Originals</h2>
         </div>
         
         <div style={{ 
@@ -140,10 +180,11 @@ const ghostButton = {
 
 const featureCardStyle = {
   padding: "26px",
-  background: "rgba(23,27,35,0.82)",
+  background: "rgba(12,16,26,0.72)",
   borderRadius: "14px",
-  border: "1px solid rgba(255,255,255,0.06)",
-  boxShadow: "0 20px 50px rgba(0,0,0,0.35)"
+  border: "1px solid rgba(255,255,255,0.10)",
+  boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+  backdropFilter: "blur(12px)"
 };
 
 const iconStyle = {

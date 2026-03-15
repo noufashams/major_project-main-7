@@ -27,6 +27,10 @@ function StaffDashboard() {
   const [period, setPeriod] = useState("30");
   const [bookings, setBookings] = useState([]);
   const [bookingsLoading, setBookingsLoading] = useState(true);
+  const [hotelProfile, setHotelProfile] = useState(null);
+  const [profileError, setProfileError] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [showProfileEdit, setShowProfileEdit] = useState(false);
   
   // Pricing State
   const [recommendations, setRecommendations] = useState([]);
@@ -41,6 +45,10 @@ function StaffDashboard() {
       fetchPricingRecommendations();
     }
   }, [activeTab, period]);
+
+  useEffect(() => {
+    fetchHotelProfile();
+  }, []);
 useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) return;
@@ -127,6 +135,41 @@ useEffect(() => {
       if (err.response?.status === 401) navigate("/staff-login");
     } finally {
       setBookingsLoading(false);
+    }
+  };
+
+  const fetchHotelProfile = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+      setProfileError("");
+      const res = await axios.get("http://localhost:3000/api/staff/hotel", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setHotelProfile(res.data);
+    } catch (err) {
+      console.error("Failed to load hotel profile", err);
+      setProfileError(err.response?.data?.message || "Unable to load property details.");
+      if (err.response?.status === 401) navigate("/staff-login");
+    }
+  };
+
+  const saveHotelProfile = async () => {
+    if (!hotelProfile) return;
+    setSavingProfile(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await axios.put("http://localhost:3000/api/staff/hotel", hotelProfile, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setHotelProfile(res.data);
+      toast.success("Hotel details updated");
+    } catch (err) {
+      console.error("Failed to save hotel profile", err);
+      toast.error(err.response?.data?.message || "Update failed");
+      if (err.response?.status === 401) navigate("/staff-login");
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -259,6 +302,13 @@ useEffect(() => {
             ⚡ AI Pricing
           </button>
           
+          <button 
+            onClick={() => setShowProfileEdit((v) => !v)} 
+            style={{...defaultNavStyle, backgroundColor: showProfileEdit ? "rgba(16,185,129,0.18)" : "rgba(255,255,255,0.06)", borderColor: showProfileEdit ? "#10b981" : "rgba(255,255,255,0.12)", color: showProfileEdit ? "#10b981" : "#e5e7eb"}}
+          >
+            ✏️ {showProfileEdit ? "Hide Edit" : "Edit Hotel"}
+          </button>
+
           <button 
             onClick={() => navigate("/bookings")} 
             style={{...defaultNavStyle, backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.12)"}}
@@ -441,45 +491,6 @@ useEffect(() => {
               </ResponsiveContainer>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "30px" }}>
-              <div style={{ ...cardStyle, height: "320px", minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Source Mix</h3>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={() => setSourceChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: sourceChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: sourceChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
-                    <button onClick={() => setSourceChartType("stack")} style={{ padding: "6px 10px", borderRadius: "8px", border: sourceChartType === "stack" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: sourceChartType === "stack" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Stacked</button>
-                  </div>
-                </div>
-                <ResponsiveContainer width="100%" height="100%">
-                  {sourceChartType === "pie" ? (
-                    <PieChart>
-                      <Tooltip />
-                      <Legend />
-                      <Pie data={sourceMix} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={100} label>
-                        {sourceMix.map((entry, index) => (
-                          <Cell key={`source-${index}`} fill={["#10b981","#3b82f6","#f59e0b","#a78bfa","#ef4444","#14b8a6"][index % 6]} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  ) : (
-                    <ComposedChart data={sourceTrend} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="date" />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="web" stackId="src" fill="#3b82f6" name="Web" />
-                      <Bar dataKey="chat" stackId="src" fill="#10b981" name="Chat" />
-                      <Bar dataKey="phone" stackId="src" fill="#f59e0b" name="Phone" />
-                      <Bar dataKey="ota" stackId="src" fill="#a78bfa" name="OTA" />
-                      <Bar dataKey="other" stackId="src" fill="#94a3b8" name="Other" />
-                    </ComposedChart>
-                  )}
-                </ResponsiveContainer>
-              </div>
-
-            </div>
-
             {/* ALERTS & RECOMMENDATIONS */}
             <div style={cardStyle}>
               <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>💡 AI Insights & Recommendations</h3>
@@ -580,6 +591,164 @@ useEffect(() => {
                 </ResponsiveContainer>
               </div>
             </div>
+
+            {/* Hotel profile quick edit (moved lower) */}
+            {showProfileEdit && (
+              <div style={{
+                position: "fixed",
+                inset: 0,
+                backgroundColor: "rgba(0,0,0,0.55)",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                padding: "20px",
+                zIndex: 4000
+              }}>
+                <div style={{
+                  width: "780px",
+                  maxHeight: "80vh",
+                  overflowY: "auto",
+                  background: "rgba(15,23,42,0.92)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: "16px",
+                  boxShadow: "0 24px 60px rgba(0,0,0,0.45)",
+                  padding: "20px",
+                  backdropFilter: "blur(16px)"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                    <div>
+                      <h3 style={{ margin: 0, color: "#e5e7eb" }}>Edit Hotel Profile</h3>
+                      <p style={{ margin: 0, color: "#9ca3af", fontSize: "13px" }}>Update details shown on the guest-facing pages.</p>
+                    </div>
+                    <button
+                      onClick={() => setShowProfileEdit(false)}
+                      style={{ background: "none", border: "none", color: "#e5e7eb", fontSize: "20px", cursor: "pointer" }}
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
+                    gap: "12px"
+                  }}>
+                    {hotelProfile ? (
+                      <>
+                        <div>
+                          <label style={formLabel}>Hotel Name</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.hotel_name || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, hotel_name: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label style={formLabel}>Location</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.location || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, location: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label style={formLabel}>Contact Phone</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.contact_phone || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, contact_phone: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label style={formLabel}>Contact Email</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.contact_email || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, contact_email: e.target.value }))}
+                          />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
+                          <label style={formLabel}>Address</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.address || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, address: e.target.value }))}
+                          />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
+                          <label style={formLabel}>Google Maps URL</label>
+                          <input
+                            style={formInput}
+                            value={hotelProfile.google_maps_url || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, google_maps_url: e.target.value }))}
+                          />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
+                          <label style={formLabel}>Description</label>
+                          <textarea
+                            style={{ ...formInput, minHeight: "90px" }}
+                            value={hotelProfile.description || ""}
+                            onChange={e => setHotelProfile(p => ({ ...p, description: e.target.value }))}
+                          />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", gap: "10px", marginTop: "4px" }}>
+                          <button
+                            onClick={() => setShowProfileEdit(false)}
+                            style={{
+                              background: "rgba(255,255,255,0.08)",
+                              color: "#e5e7eb",
+                              border: "1px solid rgba(255,255,255,0.14)",
+                              borderRadius: "10px",
+                              padding: "10px 16px",
+                              fontWeight: 700,
+                              cursor: "pointer"
+                            }}
+                          >
+                            Close
+                          </button>
+                          <button
+                            onClick={saveHotelProfile}
+                            disabled={savingProfile}
+                            style={{
+                              background: savingProfile ? "#6b7280" : "#10b981",
+                              color: "white",
+                              border: "none",
+                              borderRadius: "10px",
+                              padding: "10px 16px",
+                              fontWeight: 700,
+                              cursor: savingProfile ? "not-allowed" : "pointer",
+                              boxShadow: "0 12px 30px rgba(16,185,129,0.35)"
+                            }}
+                          >
+                            {savingProfile ? "Saving..." : "Save changes"}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <p style={{ color: "#cbd5e1", margin: "0 0 8px 0" }}>
+                          {profileError || "Loading property details..."}
+                        </p>
+                        <button
+                          onClick={fetchHotelProfile}
+                          style={{
+                            background: "#3b82f6",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "10px",
+                            padding: "8px 14px",
+                            fontWeight: 700,
+                            cursor: "pointer"
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Removed: Top Rooms and Bookings by Day of Week sections */}
 
@@ -708,7 +877,17 @@ const metricChangeStyle = (value) => ({
 const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.08)", fontSize: "13px", color: "#cbd5e1" };
 const td = { padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.05)", fontSize: "14px", color: "#e2e8f0" };
 
-
+const formLabel = { color: "#cbd5e1", fontSize: "12px", fontWeight: 700, marginBottom: "6px", display: "block" };
+const formInput = { 
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#f8fafc",
+  outline: "none",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)"
+};
 
 const alertStyle = (type) => ({
   backgroundColor: type === "danger" ? "rgba(248,113,113,0.1)" : type === "warning" ? "rgba(251,191,36,0.12)" : "rgba(16,185,129,0.12)",

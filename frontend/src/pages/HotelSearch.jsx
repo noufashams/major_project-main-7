@@ -7,17 +7,20 @@ function HotelSearch() {
   const [hotels, setHotels] = useState([]);
   const [locations, setLocations] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState("");
-  const [filters, setFilters] = useState({
-    fourPlus: false,
-    fourFivePlus: false
-  });
   const [sortOption, setSortOption] = useState("relevance");
   const [loadingSearch, setLoadingSearch] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [recentSearches, setRecentSearches] = useState([]);
   const [favorites, setFavorites] = useState(() => {
     const saved = localStorage.getItem("favoriteHotels");
     return saved ? JSON.parse(saved) : [];
   });
+  // Reviews modal
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewHotel, setReviewHotel] = useState(null);
+  const [reviewRatings, setReviewRatings] = useState([]);
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [loadingReviews, setLoadingReviews] = useState(false);
 
   const navigate = useNavigate();
 
@@ -51,6 +54,7 @@ function HotelSearch() {
       });
 
       setHotels(res.data.results);
+      setHasSearched(true);
       // If dropdown was empty (e.g., location fetch failed), hydrate from results
       if ((locations?.length || 0) === 0 && Array.isArray(res.data.results)) {
         const uniq = Array.from(new Set(res.data.results.map((h) => h.location).filter(Boolean)));
@@ -71,10 +75,6 @@ function HotelSearch() {
     }
   };
 
-  const toggleFilter = (key) => {
-    setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
   const toggleFavorite = (hotel) => {
     const exists = favorites.includes(hotel.hotel_id);
     let updated;
@@ -87,20 +87,30 @@ function HotelSearch() {
     localStorage.setItem("favoriteHotels", JSON.stringify(updated));
   };
 
-  const sortedFilteredHotels = hotels
-    .filter((h) => {
-      const rating = Number(h.avg_rating || 0);
-      if (filters.fourFivePlus && rating < 4.5) return false;
-      if (filters.fourPlus && rating < 4.0) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      const ra = Number(a.avg_rating || 0);
-      const rb = Number(b.avg_rating || 0);
-      if (sortOption === "rating_desc") return rb - ra;
-      if (sortOption === "reviews_desc") return (b.rating_count || 0) - (a.rating_count || 0);
-      return 0; // relevance (as returned)
-    });
+  const openReviews = async (hotel) => {
+    setReviewHotel(hotel);
+    setReviewModalOpen(true);
+    setReviewFilter("all");
+    setLoadingReviews(true);
+    try {
+      // Reuse the hotel detail endpoint to hydrate ratings
+      const res = await axios.get(`http://localhost:3000/api/hotels/${hotel.slug}`);
+      setReviewRatings(res.data.ratings || []);
+    } catch (err) {
+      console.error("Failed to load reviews", err);
+      setReviewRatings([]);
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
+  const sortedFilteredHotels = [...hotels].sort((a, b) => {
+    const ra = Number(a.avg_rating || 0);
+    const rb = Number(b.avg_rating || 0);
+    if (sortOption === "rating_desc") return rb - ra;
+    if (sortOption === "reviews_desc") return (b.rating_count || 0) - (a.rating_count || 0);
+    return 0; // relevance (as returned)
+  });
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
@@ -112,15 +122,12 @@ function HotelSearch() {
   return (
     <div style={{
       minHeight: "100vh",
-      backgroundColor: "#0c111d",
-      backgroundImage: [
-        "linear-gradient(125deg, rgba(0,0,0,0.82), rgba(0,0,0,0.92))",
-        "url('/assets/hero-bg.jpg')"
-      ].join(', '),
-      backgroundSize: "cover, cover",
-      backgroundPosition: "center center, center center",
+      backgroundColor: "#111827",
+      backgroundImage: "linear-gradient(125deg, rgba(0,0,0,0.04), rgba(0,0,0,0.12)), url('https://images.unsplash.com/photo-1512453979798-5ea266f8880c?auto=format&fit=crop&w=2000&q=80')",
+      backgroundSize: "cover",
+      backgroundPosition: "center center",
       backgroundRepeat: "no-repeat",
-      backgroundBlendMode: "overlay, normal",
+      backgroundBlendMode: "overlay",
       color: "#f8fafc",
       padding: "48px 20px"
     }}>
@@ -192,21 +199,8 @@ function HotelSearch() {
           </button>
         </div>
 
-          <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: "13px", color: "#e2e8f0" }}>Quick filters:</span>
-          <button
-            onClick={() => toggleFilter("fourPlus")}
-            style={pill(filters.fourPlus)}
-          >
-            ⭐ 4.0+
-          </button>
-          <button
-            onClick={() => toggleFilter("fourFivePlus")}
-            style={pill(filters.fourFivePlus)}
-          >
-            ⭐ 4.5+ Top Rated
-          </button>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ fontSize: "13px", color: "#cbd5e1" }}>Sort:</span>
             <select
               value={sortOption}
@@ -219,7 +213,6 @@ function HotelSearch() {
                 color: "#f8fafc"
               }}
             >
-              <option value="relevance">Relevance</option>
               <option value="rating_desc">Highest Rated</option>
               <option value="reviews_desc">Most Reviewed</option>
             </select>
@@ -266,7 +259,7 @@ function HotelSearch() {
             </div>
           )}
 
-          {!loadingSearch && sortedFilteredHotels.length === 0 && (
+          {!loadingSearch && sortedFilteredHotels.length === 0 && hasSearched && (
             <div style={{
               background: "rgba(0,0,0,0.32)",
               border: "1px solid rgba(255,255,255,0.20)",
@@ -277,10 +270,7 @@ function HotelSearch() {
               backdropFilter: "blur(16px)"
             }}>
               <p style={{ margin: 0, fontWeight: 600 }}>No hotels match your filters.</p>
-              <p style={{ margin: "6px 0 0" }}>Try clearing filters or searching another city.</p>
-              <div style={{ marginTop: "8px", display: "flex", justifyContent: "center", gap: "8px", flexWrap: "wrap" }}>
-                <button onClick={() => setFilters({fourPlus:false,fourFivePlus:false})} style={pill(false)}>Clear filters</button>
-              </div>
+              <p style={{ margin: "6px 0 0" }}>Try broadening your search or another city.</p>
             </div>
           )}
 
@@ -318,8 +308,24 @@ function HotelSearch() {
               <div>
                 <h3 style={{ margin: "0 0 4px 0", fontSize: "20px", color: "#f8fafc" }}>{hotel.hotel_name}</h3>
                 <p style={{ margin: 0, color: "#cbd5e1" }}>{hotel.location}</p>
-                <p style={{ margin: "6px 0 0 0", color: "#fbbf24", fontSize: "14px", fontWeight: 600 }}>
-                  ⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)
+                <p style={{ margin: "6px 0 6px 0", color: "#fbbf24", fontSize: "14px", fontWeight: 600, display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  <span>⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openReviews(hotel); }}
+                    style={{
+                      border: "1px solid rgba(255,255,255,0.32)",
+                      background: "rgba(96,165,250,0.16)",
+                      color: "#dbeafe",
+                      borderRadius: "999px",
+                      padding: "4px 10px",
+                      cursor: "pointer",
+                      fontWeight: 700,
+                      fontSize: "12px",
+                      boxShadow: "0 8px 18px rgba(37,99,235,0.25)"
+                    }}
+                  >
+                    View reviews
+                  </button>
                 </p>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "6px" }}>
                   {Number(hotel.avg_rating || 0) >= 4.5 && (
@@ -343,13 +349,101 @@ function HotelSearch() {
                       fontWeight: 700
                     }}
                   >
-                    {favorites.includes(hotel.hotel_id) ? "♥ Saved" : "♡ Save"}
+                    {favorites.includes(hotel.hotel_id) ? "♥ Liked" : "♡ Like"}
                   </button>
                 </div>
               </div>
             </div>
           ))}
         </div>
+
+        {/* Reviews modal */}
+        {reviewModalOpen && (
+          <div style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.65)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            zIndex: 2000
+          }}>
+            <div style={{
+              width: "620px",
+              maxHeight: "80vh",
+              overflow: "hidden",
+              background: "#0f172a",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: "16px",
+              boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+              display: "flex",
+              flexDirection: "column"
+            }}>
+              <div style={{ padding: "16px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", justifyContent: "space-between", alignItems: "center", color: "#e2e8f0" }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>{reviewHotel?.hotel_name || "Reviews"}</div>
+                  <div style={{ fontSize: "12px", color: "#94a3b8" }}>
+                    {reviewHotel?.location} • {reviewRatings.length} review{reviewRatings.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <button onClick={() => setReviewModalOpen(false)} style={{ background: "none", border: "none", color: "#e2e8f0", cursor: "pointer", fontSize: "20px" }}>×</button>
+              </div>
+
+              <div style={{ padding: "12px 16px", display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span style={{ fontSize: "13px", color: "#cbd5e1" }}>Filter by rating:</span>
+                {["all", "5", "4", "3"].map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => setReviewFilter(opt)}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "12px",
+                      border: `1px solid ${reviewFilter === opt ? "rgba(167,139,250,0.8)" : "rgba(255,255,255,0.18)"}`,
+                      background: reviewFilter === opt ? "rgba(167,139,250,0.16)" : "rgba(255,255,255,0.06)",
+                      color: "#e2e8f0",
+                      cursor: "pointer",
+                      fontWeight: 600
+                    }}
+                  >
+                    {opt === "all" ? "All" : `${opt}★ & up`}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ flex: 1, overflowY: "auto", padding: "16px", background: "rgba(15,23,42,0.8)" }}>
+                {loadingReviews && (
+                  <p style={{ color: "#cbd5e1", margin: 0 }}>Loading reviews...</p>
+                )}
+                {!loadingReviews && reviewRatings.filter(r => {
+                  const v = Number(r.rating || 0);
+                  if (reviewFilter === "5") return v >= 5;
+                  if (reviewFilter === "4") return v >= 4;
+                  if (reviewFilter === "3") return v >= 3;
+                  return true;
+                }).map((r, idx) => (
+                  <div key={idx} style={{
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "12px",
+                    padding: "12px",
+                    color: "#e2e8f0",
+                    marginBottom: "10px"
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>{r.guest_name || "Anonymous"}</strong>
+                      <span style={{ color: "#fbbf24", fontWeight: 700 }}>★ {Number(r.rating || 0).toFixed(1)}</span>
+                    </div>
+                    {r.comment && <p style={{ margin: "8px 0 0", color: "#cbd5e1", lineHeight: 1.5 }}>{r.comment}</p>}
+                  </div>
+                ))}
+                {!loadingReviews && reviewRatings.length === 0 && (
+                  <p style={{ color: "#94a3b8", margin: 0 }}>No reviews yet.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
