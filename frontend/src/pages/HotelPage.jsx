@@ -47,6 +47,7 @@ function HotelPage() {
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [reviewFilter, setReviewFilter] = useState("all");
   const [showMap, setShowMap] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
 
 
   // 3. AI Chatbot State
@@ -504,6 +505,17 @@ function HotelPage() {
               📍 View Map
             </button>
           )}
+          {hotel.description && (
+            <button
+              onClick={() => {
+                setShowAbout(true);
+                setTimeout(() => document.getElementById("about-section")?.scrollIntoView({ behavior: "smooth" }), 50);
+              }}
+              style={{ background: "rgba(255,255,255,0.35)", color: colors.text, border: `1px solid ${colors.border}`, padding: "8px 12px", borderRadius: "10px", cursor: "pointer", backdropFilter: "blur(6px)" }}
+            >
+              ℹ️ About Us
+            </button>
+          )}
         </div>
         <h1 style={{
           fontSize: "48px",
@@ -545,6 +557,55 @@ function HotelPage() {
       </header>
 
       <main style={{ maxWidth: "1000px", margin: "40px auto", padding: "0 20px" }}>
+        {/* Hotel description */}
+        {hotel.description && showAbout && (
+          <section
+            id="about-section"
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+              background: "rgba(0,0,0,0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 3000
+            }}>
+            <div style={{
+              background: "rgba(255,255,255,0.95)",
+              padding: "22px",
+              borderRadius: "14px",
+              border: "1px solid rgba(0,0,0,0.08)",
+              boxShadow: "0 24px 60px rgba(0,0,0,0.25)",
+              width: "90%",
+              maxWidth: "600px",
+              maxHeight: "80vh",
+              overflowY: "auto",
+              position: "relative"
+            }}>
+              <button
+                onClick={() => setShowAbout(false)}
+                style={{
+                  position: "absolute",
+                  top: "10px",
+                  right: "10px",
+                  background: "transparent",
+                  border: "none",
+                  fontSize: "18px",
+                  cursor: "pointer",
+                  color: "#0b1220"
+                }}
+              >
+                ✕
+              </button>
+              <h2 style={{ margin: "0 0 8px 0", color: colors.text }}>About Us</h2>
+              <p style={{ margin: 0, color: colors.muted, lineHeight: 1.6 }}>{hotel.description}</p>
+            </div>
+          </section>
+        )}
+
         {/* Map */}
 
         {/* Ratings removed from public view; now only after booking lookup */}
