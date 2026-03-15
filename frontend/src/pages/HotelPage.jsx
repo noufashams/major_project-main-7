@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
+import { useRef } from "react";
 
 function HotelPage() {
   const { slug } = useParams();
@@ -50,6 +51,11 @@ function HotelPage() {
   const [chatHistory, setChatHistory] = useState([
     { sender: "ai", text: "Hi! I'm the AI Receptionist. How can I help you with your booking?" }
   ]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [canUseSpeech, setCanUseSpeech] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const recognitionRef = useRef(null);
+  const synthRef = useRef(window.speechSynthesis || null);
 
   const colors = {
     // base palette for glass cards
@@ -73,6 +79,28 @@ function HotelPage() {
   useEffect(() => {
     fetchHotelData();
   }, [slug, checkIn, checkOut]);
+
+  // Set up Web Speech API availability
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.lang = "en-US";
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+      recognitionRef.current = rec;
+      setCanUseSpeech(true);
+    }
+  }, []);
+
+  const speak = (text) => {
+    if (!ttsEnabled || !synthRef.current || !text) return;
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "en-US";
+    utter.rate = 1;
+    synthRef.current.cancel();
+    synthRef.current.speak(utter);
+  };
 
   const renderStars = (value) => {
     const v = Math.round(value || 0);
@@ -301,6 +329,7 @@ const handleSendMessage = async () => {
 
       // Add the AI's response to the chat window
       setChatHistory([...newHistory, { sender: "ai", text: res.data.reply }]);
+      speak(res.data.reply);
 
       // THE MAGIC HANDOFF:
     // THE MAGIC HANDOFF:
@@ -624,7 +653,48 @@ const handleSendMessage = async () => {
               ))}
             </div>
 
-            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px" }}>
+            <div style={{ padding: "12px", borderTop: "1px solid #e5e7eb", display: "flex", gap: "8px", alignItems: "center" }}>
+              {canUseSpeech && (
+                <button
+                  onClick={() => {
+                    if (!recognitionRef.current) return;
+                    if (isRecording) {
+                      recognitionRef.current.stop();
+                      setIsRecording(false);
+                      return;
+                    }
+                    recognitionRef.current.onstart = () => setIsRecording(true);
+                    recognitionRef.current.onend = () => setIsRecording(false);
+                    recognitionRef.current.onerror = () => setIsRecording(false);
+                    recognitionRef.current.onresult = (event) => {
+                      const transcript = event.results[0][0].transcript;
+                      setChatInput(transcript);
+                      handleSendMessage(transcript);
+                    };
+                    recognitionRef.current.start();
+                  }}
+                  style={{
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: isRecording ? "1px solid #ef4444" : "1px solid #ccc",
+                    background: isRecording ? "rgba(239,68,68,0.12)" : "rgba(0,0,0,0.05)",
+                    color: isRecording ? "#ef4444" : "#1f2937",
+                    cursor: "pointer"
+                  }}
+                  title="Tap to dictate"
+                >
+                  {isRecording ? "■" : "🎤"}
+                </button>
+              )}
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#4b5563" }}>
+                <input
+                  type="checkbox"
+                  checked={ttsEnabled}
+                  onChange={(e) => setTtsEnabled(e.target.checked)}
+                  style={{ cursor: "pointer" }}
+                />
+                Read replies
+              </label>
               <input 
                 type="text" 
                 value={chatInput} 
