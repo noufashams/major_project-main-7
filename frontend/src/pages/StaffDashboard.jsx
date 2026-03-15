@@ -18,13 +18,13 @@ function StaffDashboard() {
   const [loading, setLoading] = useState(true);
   const [trendChartType, setTrendChartType] = useState("line"); // line | bar
   const [roomChartType, setRoomChartType] = useState("bar"); // bar | pie
-  const [leadChartType, setLeadChartType] = useState("bar"); // bar | pie
   const [payChartType, setPayChartType] = useState("stack"); // stack | pie
   const [sourceChartType, setSourceChartType] = useState("pie"); // pie | stack
   
   // Analytics State
   const [analytics, setAnalytics] = useState(null);
   const [period, setPeriod] = useState("30");
+  const [customPeriod, setCustomPeriod] = useState("");
   const [bookings, setBookings] = useState([]);
   const [bookingsLoading, setBookingsLoading] = useState(true);
   const [hotelProfile, setHotelProfile] = useState(null);
@@ -36,11 +36,24 @@ function StaffDashboard() {
   const [recommendations, setRecommendations] = useState([]);
   const [pricingLoading, setPricingLoading] = useState(false);
 
+  const presetPeriods = ["7", "30", "90"];
+  const isCustomPeriod = !presetPeriods.includes(period);
+
+  // Clamp percent changes to a sane range for display
+  const clampPercent = (value) => {
+    const num = Number(value);
+    if (Number.isNaN(num)) return 0;
+    if (num > 100) return 100;
+    if (num < -100) return -100;
+    return Number(num.toFixed(1));
+  };
+
   // --- DATA FETCHING ---
   useEffect(() => {
     if (activeTab === "analytics") {
       fetchAnalytics();
       fetchBookings();
+      fetchPricingRecommendations(); // also hydrate insights card while on analytics
     } else if (activeTab === "pricing") {
       fetchPricingRecommendations();
     }
@@ -230,6 +243,21 @@ useEffect(() => {
     };
   }, [analytics?.key_metrics?.payment_mix]);
 
+  const revenueChangeDisplay = useMemo(
+    () => clampPercent(analytics?.comparison?.revenue_change_percent),
+    [analytics?.comparison?.revenue_change_percent]
+  );
+
+  const formatRecommendation = (rec) => {
+    if (!rec || typeof rec !== "object") return String(rec || "");
+    const room = rec.room_type || "Room";
+    const date = rec.target_date || "soon";
+    const price = rec.recommended_price ? `₹${Number(rec.recommended_price).toLocaleString()}` : "";
+    const change = rec.price_increase_percent ? `${rec.price_increase_percent}%` : "";
+    const reason = Array.isArray(rec.reasons) && rec.reasons.length ? rec.reasons[0] : "";
+    return `${room} • ${date} • ${price}${change ? ` (${change})` : ""}${reason ? ` — ${reason}` : ""}`;
+  };
+
 // Fix: Only show full-screen loading if we don't have analytics data yet!
   const hotelTitle = analytics?.hotel?.hotel_name || bookings[0]?.hotel_name || "Hotel";
   const paymentDailyData = useMemo(() => analytics?.payment_daily || [], [analytics?.payment_daily]);
@@ -339,20 +367,60 @@ useEffect(() => {
             ========================================== */}
         {activeTab === "analytics" && analytics && (
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px" }}>
-              <select value={period} onChange={(e) => setPeriod(e.target.value)} style={{ 
-                padding: "10px 14px", 
-                borderRadius: "10px", 
-                border: "1px solid rgba(255,255,255,0.12)", 
-                background: "rgba(255,255,255,0.06)",
-                color: "white",
-                boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-                backdropFilter: "blur(8px)"
-              }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                value={isCustomPeriod ? "custom" : period}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "custom") {
+                    // switch to custom mode but don't fire fetch until number entered
+                    setPeriod(customPeriod || "custom");
+                    return;
+                  }
+                  setPeriod(val);
+                  setCustomPeriod("");
+                }}
+                style={{ 
+                  padding: "10px 14px", 
+                  borderRadius: "10px", 
+                  border: "1px solid rgba(255,255,255,0.12)", 
+                  background: "rgba(255,255,255,0.06)",
+                  color: "white",
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                  backdropFilter: "blur(8px)"
+                }}
+              >
                 <option value="7">Last 7 Days</option>
                 <option value="30">Last 30 Days</option>
                 <option value="90">Last 90 Days</option>
+                <option value="custom">Custom…</option>
               </select>
+              {isCustomPeriod && (
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  placeholder="Custom days"
+                  value={customPeriod}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomPeriod(val);
+                    if (val && Number(val) > 0) {
+                      setPeriod(val);
+                    }
+                  }}
+                  style={{
+                    width: "120px",
+                    padding: "10px 12px",
+                    borderRadius: "10px",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.06)",
+                    color: "white",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+                    backdropFilter: "blur(8px)"
+                  }}
+                />
+              )}
             </div>
 
             {/* KEY METRICS SECTION */}
@@ -360,8 +428,8 @@ useEffect(() => {
               <div style={metricCardStyle}>
                 <div style={metricLabelStyle}>💰 Total Revenue</div>
                 <div style={metricValueStyle}>₹{(analytics.summary.total_revenue || 0).toLocaleString()}</div>
-                <div style={metricChangeStyle(analytics.comparison.revenue_change_percent)}>
-                  {analytics.comparison.revenue_change_percent > 0 ? '↑' : analytics.comparison.revenue_change_percent < 0 ? '↓' : '−'} {analytics.comparison.revenue_change_percent}% vs last period
+                <div style={metricChangeStyle(revenueChangeDisplay)}>
+                  {revenueChangeDisplay > 0 ? '↑' : revenueChangeDisplay < 0 ? '↓' : '−'} {revenueChangeDisplay}% vs last period
                 </div>
               </div>
 
@@ -403,6 +471,16 @@ useEffect(() => {
                 <div style={metricLabelStyle}>🏨 Rooms Available Today</div>
                 <div style={metricValueStyle}>{analytics.summary.available_rooms ?? "—"}</div>
                 <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>Remaining inventory right now</div>
+                {Array.isArray(analytics.summary.available_by_room_type) && analytics.summary.available_by_room_type.length > 0 && (
+                  <div style={{ marginTop: "10px", fontSize: "12px", color: "#9ca3af", lineHeight: 1.5 }}>
+                    {analytics.summary.available_by_room_type.map((r) => (
+                      <div key={r.room_type} style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{r.room_type}</span>
+                        <span style={{ fontWeight: 700, color: "#e5e7eb" }}>{r.available}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div style={metricCardStyle}>
@@ -491,6 +569,36 @@ useEffect(() => {
               </ResponsiveContainer>
             </div>
 
+            <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0, marginBottom: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue by Room Type</h3>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button onClick={() => setRoomChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "bar" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "bar" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
+                  <button onClick={() => setRoomChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height="100%">
+                {roomChartType === "bar" ? (
+                  <BarChart data={analytics.revenue_by_room_type || []}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                    <XAxis dataKey="room_type" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => `₹${value}`} />
+                    <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                ) : (
+                  <PieChart>
+                    <Tooltip formatter={(value) => `₹${value}`} />
+                    <Pie data={analytics.revenue_by_room_type || []} dataKey="revenue" nameKey="room_type" cx="50%" cy="50%" outerRadius={100} label>
+                      {(analytics.revenue_by_room_type || []).map((entry, index) => (
+                        <Cell key={`room-${index}`} fill={["#10b981","#3b82f6","#f59e0b","#a78bfa","#ef4444"][index % 5]} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+
             {/* ALERTS & RECOMMENDATIONS */}
             <div style={cardStyle}>
               <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>💡 AI Insights & Recommendations</h3>
@@ -521,74 +629,12 @@ useEffect(() => {
                   </div>
                 )}
 
-                {parseFloat(analytics.comparison.revenue_change_percent) > 5 && (
+                {revenueChangeDisplay > 5 && (
                   <div style={alertStyle("success")}> 
                     <strong>✅ Revenue is Growing</strong>
-                    <p>Revenue is up {analytics.comparison.revenue_change_percent}% compared to the previous period!</p>
+                    <p>Revenue is up {revenueChangeDisplay}% compared to the previous period!</p>
                   </div>
                 )}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "30px" }}>
-              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Revenue by Room Type</h3>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={() => setRoomChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "bar" ? "1px solid #3b82f6" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "bar" ? "rgba(59,130,246,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
-                    <button onClick={() => setRoomChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
-                  </div>
-                </div>
-                <ResponsiveContainer width="100%" height="100%">
-                  {roomChartType === "bar" ? (
-                    <BarChart data={analytics.revenue_by_room_type || []}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-                      <XAxis dataKey="room_type" />
-                      <YAxis />
-                      <Tooltip formatter={(value) => `₹${value}`} />
-                      <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  ) : (
-                    <PieChart>
-                      <Tooltip formatter={(value) => `₹${value}`} />
-                      <Pie data={analytics.revenue_by_room_type || []} dataKey="revenue" nameKey="room_type" cx="50%" cy="50%" outerRadius={100} label>
-                        {(analytics.revenue_by_room_type || []).map((entry, index) => (
-                          <Cell key={`room-${index}`} fill={["#10b981","#3b82f6","#f59e0b","#a78bfa","#ef4444"][index % 5]} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  )}
-                </ResponsiveContainer>
-              </div>
-
-              <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <h3 style={{ marginTop: 0, color: "#e5e7eb" }}>Lead Time (Days before check-in)</h3>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={() => setLeadChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: leadChartType === "bar" ? "1px solid #f59e0b" : "1px solid rgba(255,255,255,0.12)", background: leadChartType === "bar" ? "rgba(245,158,11,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
-                    <button onClick={() => setLeadChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: leadChartType === "pie" ? "1px solid #14b8a6" : "1px solid rgba(255,255,255,0.12)", background: leadChartType === "pie" ? "rgba(20,184,166,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
-                  </div>
-                </div>
-                <ResponsiveContainer width="100%" height="100%">
-                  {leadChartType === "bar" ? (
-                    <BarChart data={analytics.lead_time || []}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="bucket" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  ) : (
-                    <PieChart>
-                      <Tooltip />
-                      <Pie data={analytics.lead_time || []} dataKey="count" nameKey="bucket" cx="50%" cy="50%" outerRadius={100} label>
-                        {(analytics.lead_time || []).map((entry, index) => (
-                          <Cell key={`lead-${index}`} fill={["#f59e0b","#10b981","#3b82f6","#a78bfa","#ef4444","#14b8a6"][index % 6]} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  )}
-                </ResponsiveContainer>
               </div>
             </div>
 

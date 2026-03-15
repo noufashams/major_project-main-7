@@ -86,11 +86,11 @@ function LandingPage() {
       }}>
         <div style={{ position: "relative", maxWidth: "960px", margin: "0 auto", textAlign: "center", transform: "translateY(10vh)" }}>
           <p style={{ letterSpacing: "6px", textTransform: "uppercase", color: "var(--muted)", marginBottom: "10px", fontFamily: "'Playfair Display','Cinzel','Georgia',serif" }}>SMART HOSPITALITY AI PLATFORM</p>
-          <h1 style={{ fontSize: "44px", lineHeight: "1.08", margin: "0 0 18px 0", textTransform: "uppercase", fontFamily: "'Playfair Display','Cinzel','Georgia',serif", letterSpacing: "0.5px" }}>
-            BUILD THE STAY YOU’D PIN FOREVER.
+          <h1 style={{ fontSize: "48px", lineHeight: "1.08", margin: "0 0 18px 0", textTransform: "uppercase", fontFamily: "'Playfair Display','Cinzel','Georgia',serif", letterSpacing: "0.5px" }}>
+            BUILD THE STAY YOU’D PIN FOREVER
           </h1>
-          <p style={{ fontSize: "20px", color: "var(--muted)", margin: "0 0 32px 0", maxWidth: "760px", marginInline: "auto", textTransform: "uppercase", letterSpacing: "1px", fontFamily: "'Playfair Display','Cinzel','Georgia',serif" }}>
-            SMART RATES. SEAMLESS CHAT. STUNNING STAYS.
+          <p style={{ fontSize: "16px", color: "var(--muted)", margin: "0 0 32px 0", maxWidth: "760px", marginInline: "auto", textTransform: "none", letterSpacing: "1px", fontFamily: "'Playfair Display','Cinzel','Georgia',serif" }}>
+            STOP PAYING 25% OTA COMMISSIONS
           </p>
           <div style={{ display: "flex", justifyContent: "center", gap: "14px", flexWrap: "wrap" }}>
             <button 
@@ -122,8 +122,19 @@ function LandingPage() {
         }}
       >
         <div style={{ textAlign: "center", marginBottom: "40px" }}>
-          <p style={{ letterSpacing: "5px", textTransform: "uppercase", color: "#cbd5e1", margin: "0 0 6px 0" }}>Why InnGo</p>
-          <h2 style={{ fontSize: "36px", margin: 0, color: "#f8fafc" }}>Designed for Boutique Originals</h2>
+          <p style={{ letterSpacing: "5px", textTransform: "uppercase", color: "#cbd5e1", margin: "0 0 6px 0", fontSize: "20px", fontWeight: 800 }}>Why InnGo</p>
+          <h2 style={{ 
+            fontSize: "14px",
+            margin: 0,
+            color: "#cbd5e1",
+            lineHeight: 1.35,
+            letterSpacing: "5px",
+            textTransform: "uppercase",
+            fontFamily: "'Playfair Display','Cinzel','Georgia',serif",
+            fontWeight: 600
+          }}>
+            The all in one operating system for independent botique hotels. Get your own white labeled direct booking engine, powered by ai yield management
+          </h2>
         </div>
         
         <div style={{ 

@@ -10,7 +10,6 @@ function HotelSearch() {
   const [sortOption, setSortOption] = useState("relevance");
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [recentSearches, setRecentSearches] = useState([]);
   const [favorites, setFavorites] = useState(() => {
     const saved = localStorage.getItem("favoriteHotels");
     return saved ? JSON.parse(saved) : [];
@@ -35,8 +34,6 @@ function HotelSearch() {
       }
     };
     loadLocations();
-    const storedRecent = localStorage.getItem("recentHotelSearches");
-    if (storedRecent) setRecentSearches(JSON.parse(storedRecent));
   }, []);
 
   const handleSearch = async () => {
@@ -60,12 +57,6 @@ function HotelSearch() {
         const uniq = Array.from(new Set(res.data.results.map((h) => h.location).filter(Boolean)));
         setLocations(uniq);
       }
-
-      const nextRecent = [{ q: query.trim(), location: selectedLocation.trim() }]
-        .concat(recentSearches.filter(r => !(r.q === query.trim() && r.location === selectedLocation.trim())))
-        .slice(0, 3);
-      setRecentSearches(nextRecent);
-      localStorage.setItem("recentHotelSearches", JSON.stringify(nextRecent));
 
     } catch (err) {
       console.error(err);
@@ -218,22 +209,6 @@ function HotelSearch() {
             </select>
           </div>
         </div>
-
-        {recentSearches.length > 0 && (
-          <div style={{ marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", color: "#cbd5e1", fontSize: "13px" }}>
-            <span>Recent:</span>
-            {recentSearches.map((r, idx) => (
-              <button
-                key={idx}
-                onClick={() => { setQuery(r.q); setSelectedLocation(r.location); handleSearch(); }}
-                style={pill(false)}
-              >
-                {r.q || "Any"} {r.location ? `• ${r.location}` : ""}
-              </button>
-            ))}
-          </div>
-        )}
-
         <div style={{ marginTop: "20px", display: "grid", gap: "14px" }}>
           {loadingSearch && sortedFilteredHotels.length === 0 && (
             <div style={{ display: "grid", gap: "12px" }}>

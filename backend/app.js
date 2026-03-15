@@ -1540,6 +1540,28 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     );
     const availableRoomsToday = parseInt(availSnapshot.rows[0].available_rooms) || 0;
 
+    // 🔍 AVAILABLE ROOMS BY ROOM TYPE (current snapshot)
+    const availByTypeRes = await db.query(
+      `WITH occupied AS (
+         SELECT room_id, SUM(number_of_rooms) AS booked_now
+           FROM bookings
+          WHERE hotel_id = $1
+            AND booking_status = 'confirmed'
+            AND check_in_date <= CURRENT_DATE
+            AND check_out_date > CURRENT_DATE
+          GROUP BY room_id
+      )
+      SELECT 
+        r.room_type,
+        SUM(r.total_rooms) - COALESCE(SUM(o.booked_now), 0) AS available_rooms
+      FROM rooms r
+      LEFT JOIN occupied o ON o.room_id = r.room_id
+      WHERE r.hotel_id = $1
+      GROUP BY r.room_type
+      ORDER BY r.room_type`,
+      [hotel_id]
+    );
+
     // 🚀 SEND PERFECTLY FORMATTED JSON
     // Derive payment mix map
     const paymentMixMap = paymentMixRows.reduce((acc, row) => {
@@ -1565,7 +1587,11 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
         total_bookings: totalBookings,
         confirmed_bookings: confirmedCount,
         cancelled_bookings: cancelledCount,
-        available_rooms: availableRoomsToday
+        available_rooms: availableRoomsToday,
+        available_by_room_type: availByTypeRes.rows.map(r => ({
+          room_type: r.room_type,
+          available: parseInt(r.available_rooms) || 0
+        }))
       },
       key_metrics: {
         occupancy_rate: occupancyRate,
