@@ -442,6 +442,8 @@ app.get("/api/hotels/search", async (req, res) => {
       conditions.push(`LOWER(TRIM(location)) = LOWER(TRIM($${params.length}))`);
     }
 
+    // Only show verified hotels to guests
+    conditions.push("h.is_verified = true");
     const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const result = await db.query(
@@ -477,6 +479,7 @@ app.get("/api/hotels/locations", async (_req, res) => {
               TRIM(location) AS location,
               LOWER(TRIM(location)) AS normalized_location
        FROM hotels
+       WHERE is_verified = true
        ORDER BY LOWER(TRIM(location)), TRIM(location)`
     );
     res.json({ locations: result.rows.map(r => r.location) });
