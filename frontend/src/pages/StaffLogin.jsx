@@ -15,17 +15,24 @@ function StaffLogin() {
     }
 
     try {
-      const res = await axios.post(
-        "http://localhost:3000/api/staff/login",
-        { email, password }
-      );
-
+      // Try hotel owner login first
+      const res = await axios.post("http://localhost:3000/api/staff/login", { email, password });
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("email", email);
+      localStorage.removeItem("adminToken");
       navigate("/dashboard");
     } catch (err) {
-      console.error(err);
-      setError(err.response?.data?.message || "Login failed");
+      // If staff login fails, fall back to admin login
+      try {
+        const adminRes = await axios.post("http://localhost:3000/api/admin/login", { email, password });
+        localStorage.setItem("adminToken", adminRes.data.token);
+        localStorage.removeItem("token");
+        navigate("/admin-dashboard");
+      } catch (adminErr) {
+        console.error(adminErr);
+        const msg = adminErr.response?.data?.message || err.response?.data?.message || "Login failed";
+        setError(msg);
+      }
     }
   };
 
@@ -67,9 +74,13 @@ function StaffLogin() {
           padding: "40px 14px",
           border: "1px solid rgba(255,255,255,0.18)"
         }}>
-          <p style={{ margin: 0, letterSpacing: "0.18em", fontSize: "11px", color: "#cbd5e1" }}>STAFF PORTAL</p>
+          <p style={{ margin: 0, letterSpacing: "0.18em", fontSize: "11px", color: "#cbd5e1" }}>
+            OWNER & ADMIN
+          </p>
           <h2 style={{ margin: "6px 0 4px", color: "#fff", letterSpacing: "0.01em" }}>Sign in</h2>
-          <p style={{ margin: 0, color: "#d1d5db", fontSize: "14px" }}>Access your hotel command center</p>
+          <p style={{ margin: 0, color: "#d1d5db", fontSize: "14px" }}>
+            Access your hotel command center or admin console
+          </p>
         </div>
 
         {error && (

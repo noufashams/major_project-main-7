@@ -48,7 +48,7 @@ function HotelRegister() {
         }
       );
 
-      alert("Hotel registered successfully");
+      alert("Hotel registered successfully. Please wait for admin verification before logging in.");
 
       navigate("/staff-login");
 

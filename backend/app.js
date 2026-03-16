@@ -447,7 +447,7 @@ app.post("/api/hotels/register", upload.single('license_file'), async (req, res)
     await db.query("COMMIT");
 
     res.status(201).json({
-      message: "Hotel and staff account created successfully",
+      message: "Hotel registered successfully. Please wait for admin verification before logging in.",
       hotel_id,
       staff_login: "/staff-login",
       hotel_page: `/hotel/${slug}`
@@ -706,9 +706,10 @@ app.post("/api/staff/login", async (req, res) => {
 
   try {
     const result = await db.query(
-      `SELECT staff_id, hotel_id, name, password_hash, role
-       FROM staff_users
-       WHERE email = $1`,
+      `SELECT s.staff_id, s.hotel_id, s.name, s.password_hash, s.role, h.is_verified
+       FROM staff_users s
+       JOIN hotels h ON h.hotel_id = s.hotel_id
+       WHERE s.email = $1`,
       [email]
     );
 
@@ -719,6 +720,10 @@ app.post("/api/staff/login", async (req, res) => {
     }
 
     const staff = result.rows[0];
+
+    if (!staff.is_verified) {
+      return res.status(403).json({ message: "Hotel not verified yet. Please wait for admin approval." });
+    }
 
     const isMatch = password === staff.password_hash;
 
@@ -1250,7 +1255,8 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
 
     const today = new Date();
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - period);
+    // Use an inclusive window: period=1 => today only; period=7 => last 7 days including today
+    startDate.setDate(startDate.getDate() - (period - 1));
     
     const previousStartDate = new Date(startDate);
     previousStartDate.setDate(previousStartDate.getDate() - period);

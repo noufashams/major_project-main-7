@@ -7,7 +7,6 @@ import HotelPage from "./pages/HotelPage";
 import HotelRegister from "./pages/HotelRegister";
 import RoomManagement from "./pages/RoomManagement";
 import LandingPage from "./pages/LandingPage";
-import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import StaffBookings from "./pages/StaffBookings";
 
@@ -22,7 +21,8 @@ function App() {
       <Route path="/dashboard" element={<StaffDashboard />} />
       <Route path="/bookings" element={<StaffBookings />} />
       <Route path="/rooms" element={<RoomManagement />} />
-      <Route path="/admin-login" element={<AdminLogin />} />
+      {/* Admins use the same unified login screen */}
+      <Route path="/admin-login" element={<StaffLogin />} />
       <Route path="/admin-dashboard" element={<AdminDashboard />} />
     </Routes>
   );
