@@ -55,6 +55,40 @@ const io = new Server(httpServer, {
   }
 });
 
+// Reusable email sender for platform notifications
+const sendPlatformEmail = async (to, subject, text) => {
+  if (!to) return { sent: false, error: "No recipient provided" };
+  try {
+    const hasHost = process.env.SMTP_HOST || process.env.SMTP_URL;
+    const hasUser = process.env.SMTP_USER && process.env.SMTP_PASS;
+    if (!hasHost && !hasUser) {
+      throw new Error("SMTP not configured. Set SMTP_HOST/SMTP_PORT and SMTP_USER/SMTP_PASS (or SMTP_URL).");
+    }
+
+    const nodemailer = (await import("nodemailer")).default;
+    const transporter = process.env.SMTP_URL
+      ? nodemailer.createTransport(process.env.SMTP_URL)
+      : nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 587,
+          secure: process.env.SMTP_SECURE === "true",
+          auth: hasUser ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined
+        });
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || "no-reply@stayatelier.local",
+      to,
+      subject,
+      text
+    });
+
+    return { sent: true, error: null };
+  } catch (err) {
+    console.error("Email send skipped/failed:", err.message);
+    return { sent: false, error: err.message };
+  }
+};
+
 // 🚨 WEBSOCKET LISTENER LOGIC
 io.on("connection", (socket) => {
   console.log("🟢 Live Dashboard Connected:", socket.id);
@@ -1129,12 +1163,32 @@ app.get("/api/admin/hotels/pending", verifyAdmin, async (_req, res) => {
 app.post("/api/admin/hotels/:hotel_id/verify", verifyAdmin, async (req, res) => {
   const { hotel_id } = req.params;
   try {
-    const result = await db.query(
+    const hotelResult = await db.query(
+      "SELECT hotel_name, contact_email FROM hotels WHERE hotel_id = $1",
+      [hotel_id]
+    );
+    if (hotelResult.rowCount === 0) return res.status(404).json({ message: "Hotel not found" });
+
+    const staffResult = await db.query(
+      "SELECT email, password_hash FROM staff_users WHERE hotel_id = $1 AND role = 'admin' ORDER BY staff_id LIMIT 1",
+      [hotel_id]
+    );
+
+    const updateResult = await db.query(
       "UPDATE hotels SET is_verified = true WHERE hotel_id = $1 RETURNING hotel_id",
       [hotel_id]
     );
-    if (result.rowCount === 0) return res.status(404).json({ message: "Hotel not found" });
-    res.json({ message: "Hotel verified" });
+    if (updateResult.rowCount === 0) return res.status(404).json({ message: "Hotel not found" });
+
+    const adminEmail = staffResult.rows[0]?.email || hotelResult.rows[0]?.contact_email;
+    const adminPassword = staffResult.rows[0]?.password_hash;
+    const { sent, error } = await sendPlatformEmail(
+      adminEmail,
+      "Your hotel has been verified",
+      `Hi,\n\nYour hotel \"${hotelResult.rows[0].hotel_name}\" is now verified and live on the platform.\n\nLogin URL: http://localhost:5173/staff-login\nEmail: ${adminEmail || "N/A"}\n${adminPassword ? `Password: ${adminPassword}\n` : ""}\nPlease log in to manage your property. If you need a password reset, use the Forgot Password option.\n\nThanks,\nPlatform Team`
+    );
+
+    res.json({ message: "Hotel verified", email_sent: sent, email_error: error });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -1145,6 +1199,17 @@ app.post("/api/admin/hotels/:hotel_id/verify", verifyAdmin, async (req, res) => 
 app.delete("/api/admin/hotels/:hotel_id", verifyAdmin, async (req, res) => {
   const { hotel_id } = req.params;
   try {
+    const hotelMeta = await db.query(
+      "SELECT hotel_name, contact_email FROM hotels WHERE hotel_id = $1",
+      [hotel_id]
+    );
+    if (hotelMeta.rowCount === 0) return res.status(404).json({ message: "Hotel not found" });
+
+    const staffMeta = await db.query(
+      "SELECT email FROM staff_users WHERE hotel_id = $1 AND role = 'admin' ORDER BY staff_id LIMIT 1",
+      [hotel_id]
+    );
+
     await db.query("BEGIN");
     // remove dependent data to avoid FK issues
     await db.query("DELETE FROM bookings WHERE hotel_id = $1", [hotel_id]);
@@ -1155,7 +1220,15 @@ app.delete("/api/admin/hotels/:hotel_id", verifyAdmin, async (req, res) => {
     const result = await db.query("DELETE FROM hotels WHERE hotel_id = $1 RETURNING hotel_id", [hotel_id]);
     await db.query("COMMIT");
     if (result.rowCount === 0) return res.status(404).json({ message: "Hotel not found" });
-    res.json({ message: "Hotel removed" });
+
+    const recipient = staffMeta.rows[0]?.email || hotelMeta.rows[0]?.contact_email;
+    const { sent, error } = await sendPlatformEmail(
+      recipient,
+      "Hotel removed from platform",
+      `Hi,\n\nYour hotel \"${hotelMeta.rows[0].hotel_name}\" has been removed from the platform by an administrator. All associated data has been deleted.\nIf you believe this was in error, please contact support.\n\nThanks,\nPlatform Team`
+    );
+
+    res.json({ message: "Hotel removed", email_sent: sent, email_error: error });
   } catch (err) {
     await db.query("ROLLBACK");
     console.error(err);
