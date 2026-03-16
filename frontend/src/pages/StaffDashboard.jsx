@@ -1,4 +1,3 @@
-
 import { useEffect, useState, useMemo } from "react";
 import toast, { Toaster } from "react-hot-toast";
 import axios from "axios";
@@ -62,7 +61,8 @@ function StaffDashboard() {
   useEffect(() => {
     fetchHotelProfile();
   }, []);
-useEffect(() => {
+
+  useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) return;
 
@@ -610,7 +610,7 @@ useEffect(() => {
                   </div>
                 )}
 
-           
+            
                 {parseFloat(analytics.key_metrics.cancellation_rate) > 20 && (
                   <div style={alertStyle("danger")}> 
                     <strong>🚨 High Cancellation Rate!</strong>
@@ -796,8 +796,6 @@ useEffect(() => {
               </div>
             )}
 
-            {/* Removed: Top Rooms and Bookings by Day of Week sections */}
-
           </div>
         )}
 
@@ -942,4 +940,5 @@ const alertStyle = (type) => ({
   borderRadius: "10px",
   color: type === "danger" ? "#fecdd3" : type === "warning" ? "#fef3c7" : "#d1fae5",
 });
+
 export default StaffDashboard;

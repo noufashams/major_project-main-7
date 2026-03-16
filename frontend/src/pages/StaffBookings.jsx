@@ -138,6 +138,7 @@ function StaffBookings() {
                   <th style={th}>Guest</th>
                   <th style={th}>Phone</th>
                   <th style={th}>Room</th>
+                  <th style={th}>Rooms</th>
                   <th style={th}>Check-In</th>
                   <th style={th}>Check-Out</th>
                   <th style={th}>Status</th>
@@ -153,6 +154,7 @@ function StaffBookings() {
                     <td style={td}>{b.guest_name}</td>
                     <td style={td}>{b.guest_phone}</td>
                     <td style={td}>{b.room_type}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{b.number_of_rooms || 1}</td>
                     <td style={td}>{new Date(b.check_in_date).toLocaleDateString()}</td>
                     <td style={td}>{new Date(b.check_out_date).toLocaleDateString()}</td>
                     <td style={td}>{b.booking_status}</td>
