@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 
 function AdminDashboard() {
   const [pending, setPending] = useState([]);
+  const [verified, setVerified] = useState([]);
+  const [view, setView] = useState("pending");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const navigate = useNavigate();
@@ -32,8 +34,31 @@ function AdminDashboard() {
     }
   };
 
+  const fetchVerified = async () => {
+    if (!token) {
+      navigate("/admin-login", { replace: true });
+      return;
+    }
+    try {
+      setLoading(true);
+      const res = await axios.get("http://localhost:3000/api/admin/hotels/verified", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setVerified(res.data || []);
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to load verified hotels");
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        localStorage.removeItem("adminToken");
+        navigate("/admin-login", { replace: true });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchPending();
+    fetchVerified();
   }, []);
 
   const verifyHotel = async (hotel_id) => {
@@ -78,11 +103,16 @@ function AdminDashboard() {
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
           <div>
             <p style={{ margin: 0, letterSpacing: "0.12em", fontSize: "11px", color: "#cbd5e1" }}>ADMIN</p>
-            <h1 style={{ margin: "4px 0 0", fontSize: "30px", color: "#f8fafc" }}>Pending Hotels</h1>
-            <p style={{ margin: "4px 0 0", color: "#cbd5e1" }}>{pending.length} awaiting verification</p>
+            <h1 style={{ margin: "4px 0 0", fontSize: "30px", color: "#f8fafc" }}>Hotels</h1>
+            <p style={{ margin: "4px 0 0", color: "#cbd5e1" }}>{pending.length} pending • {verified.length} verified</p>
           </div>
           <button onClick={logout} style={secondaryButton}>Logout</button>
         </header>
+
+        <div style={{ display: "flex", gap: "10px", marginBottom: "14px" }}>
+          <button onClick={() => setView("pending")} style={{ ...secondaryButton, background: view==="pending"?"rgba(34,197,94,0.18)":"rgba(255,255,255,0.10)", borderColor: view==="pending"?"rgba(34,197,94,0.6)":"rgba(255,255,255,0.18)" }}>Pending</button>
+          <button onClick={() => setView("verified")} style={{ ...secondaryButton, background: view==="verified"?"rgba(59,130,246,0.18)":"rgba(255,255,255,0.10)", borderColor: view==="verified"?"rgba(59,130,246,0.6)":"rgba(255,255,255,0.18)" }}>Verified</button>
+        </div>
 
         {error && (
           <div style={{
@@ -98,30 +128,52 @@ function AdminDashboard() {
         )}
 
         {loading ? (
-          <div style={{ color: "#e5e7eb" }}>Loading pending hotels...</div>
-        ) : pending.length === 0 ? (
-          <div style={cardStyle}>
-            <p style={{ margin: 0, color: "#cbd5e1" }}>No hotels waiting for verification.</p>
-          </div>
+          <div style={{ color: "#e5e7eb" }}>Loading hotels...</div>
+        ) : view === "pending" ? (
+          pending.length === 0 ? (
+            <div style={cardStyle}>
+              <p style={{ margin: 0, color: "#cbd5e1" }}>No hotels waiting for verification.</p>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: "12px" }}>
+              {pending.map(hotel => (
+                <div key={hotel.hotel_id} style={cardStyle}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                    <div>
+                      <h3 style={{ margin: "0 0 4px", color: "#f8fafc" }}>{hotel.hotel_name}</h3>
+                      <p style={{ margin: 0, color: "#cbd5e1" }}>{hotel.location}</p>
+                      <p style={{ margin: "6px 0 0", color: "#94a3b8", fontSize: "13px" }}>{hotel.contact_email} • {hotel.contact_phone}</p>
+                      {hotel.license_file_path && (
+                        <a href={`http://localhost:3000/${hotel.license_file_path}`} target="_blank" rel="noreferrer" style={{ color: "#93c5fd", fontWeight: 700, display: "inline-block", marginTop: "6px" }}>
+                          View License
+                        </a>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <button onClick={() => verifyHotel(hotel.hotel_id)} style={primaryButton}>Verify</button>
+                      <button onClick={() => deleteHotel(hotel.hotel_id)} style={dangerButton}>Delete</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
         ) : (
           <div style={{ display: "grid", gap: "12px" }}>
-            {pending.map(hotel => (
+            {verified.length === 0 ? (
+              <div style={cardStyle}>
+                <p style={{ margin: 0, color: "#cbd5e1" }}>No verified hotels found.</p>
+              </div>
+            ) : verified.map(hotel => (
               <div key={hotel.hotel_id} style={cardStyle}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
                   <div>
                     <h3 style={{ margin: "0 0 4px", color: "#f8fafc" }}>{hotel.hotel_name}</h3>
                     <p style={{ margin: 0, color: "#cbd5e1" }}>{hotel.location}</p>
                     <p style={{ margin: "6px 0 0", color: "#94a3b8", fontSize: "13px" }}>{hotel.contact_email} • {hotel.contact_phone}</p>
-                    {hotel.license_file_path && (
-                      <a href={`http://localhost:3000/${hotel.license_file_path}`} target="_blank" rel="noreferrer" style={{ color: "#93c5fd", fontWeight: 700, display: "inline-block", marginTop: "6px" }}>
-                        View License
-                      </a>
-                    )}
+                    <p style={{ margin: "4px 0 0", color: "#22c55e", fontWeight: 700 }}>Verified</p>
                   </div>
-                  <div style={{ display: "flex", gap: "10px" }}>
-                    <button onClick={() => verifyHotel(hotel.hotel_id)} style={primaryButton}>Verify</button>
-                    <button onClick={() => deleteHotel(hotel.hotel_id)} style={dangerButton}>Delete</button>
-                  </div>
+                  <button onClick={() => deleteHotel(hotel.hotel_id)} style={dangerButton}>Remove</button>
                 </div>
               </div>
             ))}

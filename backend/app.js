@@ -38,7 +38,7 @@ const verifyAdmin = (req, res, next) => {
 };
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 dotenv.config();
 
@@ -567,6 +567,7 @@ app.get("/api/hotels/:slug", async (req, res) => {
   const { date } = req.query; 
   const checkInQuery = req.query.check_in;
   const checkOutQuery = req.query.check_out;
+  const hasDates = !!(checkInQuery && checkOutQuery);
 
   const checkInISO = checkInQuery ? new Date(checkInQuery).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
   const defaultCheckout = new Date(checkInISO);
@@ -589,17 +590,20 @@ app.get("/api/hotels/:slug", async (req, res) => {
           r.description,
           r.capacity,
           r.total_rooms,
-          (r.total_rooms - COALESCE(
-            (SELECT MAX(daily_booked) FROM (
-                SELECT d.stay_date, SUM(b.number_of_rooms) as daily_booked
-                FROM generate_series($2::date, ($3::date - INTERVAL '1 day'), INTERVAL '1 day') AS d(stay_date)
-                JOIN bookings b ON b.room_id = r.room_id 
-                               AND b.booking_status = 'confirmed'
-                               AND b.check_in_date <= d.stay_date
-                               AND b.check_out_date > d.stay_date
-                GROUP BY d.stay_date
-            ) max_calc), 0)
-          ) AS available_rooms,
+          CASE 
+            WHEN NOT $5 THEN r.total_rooms
+            ELSE (r.total_rooms - COALESCE(
+              (SELECT MAX(daily_booked) FROM (
+                  SELECT d.stay_date, SUM(b.number_of_rooms) as daily_booked
+                  FROM generate_series($2::date, ($3::date - INTERVAL '1 day'), INTERVAL '1 day') AS d(stay_date)
+                  JOIN bookings b ON b.room_id = r.room_id 
+                                 AND b.booking_status = 'confirmed'
+                                 AND b.check_in_date <= d.stay_date
+                                 AND b.check_out_date > d.stay_date
+                  GROUP BY d.stay_date
+              ) max_calc), 0)
+            ) 
+          END AS available_rooms,
           COALESCE(
             (SELECT json_agg(
                json_build_object('picture_id', picture_id, 'picture_url', 'http://localhost:3000/' || picture_url)
@@ -619,7 +623,7 @@ app.get("/api/hotels/:slug", async (req, res) => {
        FROM rooms r
        LEFT JOIN room_price_overrides o ON r.room_id = o.room_id AND o.target_date = $4
        WHERE r.hotel_id = $1`,
-      [hotel.hotel_id, checkInISO, checkOutISO, overrideDate]
+      [hotel.hotel_id, checkInISO, checkOutISO, overrideDate, hasDates]
     );
 
     const ratings = await db.query(
@@ -630,6 +634,61 @@ app.get("/api/hotels/:slug", async (req, res) => {
     res.json({ hotel: hotel, rooms: roomsResult.rows, ratings: ratings.rows });
   } catch (err) {
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ==========================================
+// STAFF: Availability by date range
+// ==========================================
+app.get("/api/staff/availability", verifyToken, async (req, res) => {
+  const hotel_id = req.user.hotel_id;
+  const { check_in, check_out } = req.query;
+  if (!hotel_id) return res.status(400).json({ message: "Hotel ID missing" });
+
+  // Default to today -> tomorrow if not provided
+  const checkInDate = check_in ? new Date(check_in) : new Date();
+  const checkOutDate = check_out ? new Date(check_out) : new Date(new Date().setDate(new Date().getDate() + 1));
+  const isInvalidDate = (d) => Number.isNaN(d.getTime());
+  if (isInvalidDate(checkInDate) || isInvalidDate(checkOutDate)) {
+    return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD." });
+  }
+  if (checkOutDate <= checkInDate) {
+    return res.status(400).json({ message: "Check-out must be after check-in." });
+  }
+  const checkInISO = checkInDate.toISOString().slice(0, 10);
+  const checkOutISO = checkOutDate.toISOString().slice(0, 10);
+
+  try {
+    const roomsResult = await db.query(
+      `SELECT r.room_id, r.room_type, r.total_rooms, r.price_per_night,
+              (r.total_rooms - COALESCE(
+                (SELECT MAX(daily_booked) FROM (
+                    SELECT d.stay_date, SUM(b.number_of_rooms) as daily_booked
+                    FROM generate_series($2::date, ($3::date - INTERVAL '1 day'), INTERVAL '1 day') AS d(stay_date)
+                    JOIN bookings b ON b.room_id = r.room_id 
+                                   AND b.booking_status = 'confirmed'
+                                   AND b.check_in_date <= d.stay_date
+                                   AND b.check_out_date > d.stay_date
+                    GROUP BY d.stay_date
+                ) max_calc), 0)
+              ) AS available_rooms
+         FROM rooms r
+        WHERE r.hotel_id = $1
+        ORDER BY r.room_type`,
+      [hotel_id, checkInISO, checkOutISO]
+    );
+
+    const totalAvailable = roomsResult.rows.reduce((sum, r) => sum + (parseInt(r.available_rooms) || 0), 0);
+    res.json({
+      hotel_id,
+      check_in: checkInISO,
+      check_out: checkOutISO,
+      total_available: totalAvailable,
+      rooms: roomsResult.rows
+    });
+  } catch (err) {
+    console.error("Availability fetch failed:", err.message);
+    res.status(500).json({ message: "Failed to fetch availability" });
   }
 });
 
@@ -782,7 +841,7 @@ app.get("/api/rooms", verifyToken, async (req, res) => {
     const result = await db.query(
       `SELECT 
          r.room_id, r.room_type, r.price_per_night, r.total_rooms, r.description, r.capacity,
-         (r.total_rooms - COALESCE((SELECT SUM(number_of_rooms) FROM bookings WHERE room_id = r.room_id AND booking_status = 'confirmed' AND CURRENT_DATE >= check_in_date AND CURRENT_DATE < check_out_date), 0)) AS available_rooms,
+         r.total_rooms AS available_rooms,
          COALESCE(
            (SELECT json_agg(
               json_build_object('picture_id', picture_id, 'picture_url', 'http://localhost:3000/' || picture_url)
@@ -1005,6 +1064,18 @@ app.get("/api/admin/hotels/pending", verifyAdmin, async (_req, res) => {
   }
 });
 
+app.get("/api/admin/hotels/verified", verifyAdmin, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT hotel_id, hotel_name, location, contact_email, contact_phone, is_verified
+         FROM hotels WHERE is_verified = true ORDER BY hotel_id DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 app.post("/api/admin/hotels/:hotel_id/verify", verifyAdmin, async (req, res) => {
   const { hotel_id } = req.params;
   try {
@@ -1036,9 +1107,18 @@ app.delete("/api/admin/hotels/:hotel_id", verifyAdmin, async (req, res) => {
     const staffMeta = await db.query("SELECT email FROM staff_users WHERE hotel_id = $1 AND role = 'admin' ORDER BY staff_id LIMIT 1", [hotel_id]);
 
     await db.query("BEGIN");
+    await db.query("DELETE FROM booking_assigned_rooms WHERE booking_id IN (SELECT booking_id FROM bookings WHERE hotel_id = $1)", [hotel_id]);
     await db.query("DELETE FROM bookings WHERE hotel_id = $1", [hotel_id]);
     await db.query("DELETE FROM room_pictures WHERE room_id IN (SELECT room_id FROM rooms WHERE hotel_id = $1)", [hotel_id]);
     await db.query("DELETE FROM room_amenities WHERE room_id IN (SELECT room_id FROM rooms WHERE hotel_id = $1)", [hotel_id]);
+    await db.query("DELETE FROM room_price_overrides WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM pricing_history WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM hotel_pictures WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM hotel_amenities WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM hotel_ratings WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM guest_queries WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM analytics_summary WHERE hotel_id = $1", [hotel_id]);
+    await db.query("DELETE FROM room_inventory WHERE room_id IN (SELECT room_id FROM rooms WHERE hotel_id = $1)", [hotel_id]).catch(() => {});
     await db.query("DELETE FROM rooms WHERE hotel_id = $1", [hotel_id]);
     await db.query("DELETE FROM staff_users WHERE hotel_id = $1", [hotel_id]);
     await db.query("DELETE FROM hotels WHERE hotel_id = $1", [hotel_id]);
@@ -1063,19 +1143,26 @@ app.delete("/api/admin/hotels/:hotel_id", verifyAdmin, async (req, res) => {
 app.get("/api/staff/analytics", verifyToken, async (req, res) => {
   const hotel_id = req.user.hotel_id;
   const period = parseInt(req.query.period) || 30;
+  const startParam = req.query.start_date ? new Date(req.query.start_date) : null;
+  const endParam = req.query.end_date ? new Date(req.query.end_date) : null;
 
   try {
     const hotelMeta = await db.query("SELECT hotel_name FROM hotels WHERE hotel_id = $1", [hotel_id]);
     const hotelName = hotelMeta.rows[0]?.hotel_name || null;
 
     const today = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - period);
+    const endDateBase = endParam && !Number.isNaN(endParam) ? endParam : today;
+    endDateBase.setHours(0,0,0,0);
+    const startDate = startParam && !Number.isNaN(startParam) ? new Date(startParam) : new Date(endDateBase);
+    startDate.setHours(0,0,0,0);
+    if (!(startParam && !Number.isNaN(startParam))) {
+      startDate.setDate(startDate.getDate() - period);
+    }
     
     const previousStartDate = new Date(startDate);
     previousStartDate.setDate(previousStartDate.getDate() - period);
 
-    const endDateExclusive = new Date(today);
+    const endDateExclusive = new Date(endDateBase);
     endDateExclusive.setDate(endDateExclusive.getDate() + 1);
 
     const startDateStr = startDate.toISOString().slice(0, 10);
@@ -1094,7 +1181,7 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
        )
        SELECT 
          COUNT(DISTINCT booking_id) FILTER (WHERE booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3) AS confirmed_bookings,
-         COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND payment_status = 'paid' AND stay_date >= $2 AND stay_date < $3 THEN price_per_night * rooms END), 0) AS total_revenue,
+         COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN price_per_night * rooms END), 0) AS total_revenue,
          COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN rooms END), 0) AS room_nights,
          COALESCE(SUM(CASE WHEN booking_status = 'confirmed' AND stay_date >= $2 AND stay_date < $3 THEN 1 END), 0) AS booking_nights
        FROM stay_dates`,
@@ -1255,15 +1342,35 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     );
 
     const availSnapshot = await db.query(
-      `SELECT COALESCE(SUM(r.total_rooms),0) - COALESCE((SELECT SUM(b.number_of_rooms) FROM bookings b WHERE b.hotel_id = $1 AND b.booking_status = 'confirmed' AND b.check_in_date <= CURRENT_DATE AND b.check_out_date > CURRENT_DATE),0) AS available_rooms
+      `SELECT COALESCE(SUM(r.total_rooms),0) - COALESCE((
+         SELECT SUM(b.number_of_rooms)
+           FROM bookings b
+          WHERE b.hotel_id = $1
+            AND b.booking_status = 'confirmed'
+            AND b.check_in_date <= CURRENT_DATE
+            AND b.check_out_date > CURRENT_DATE
+      ),0) AS available_rooms
        FROM rooms r WHERE r.hotel_id = $1`,
       [hotel_id]
     );
 
     const availByTypeRes = await db.query(
-      `WITH occupied AS (SELECT room_id, SUM(number_of_rooms) AS booked_now FROM bookings WHERE hotel_id = $1 AND booking_status = 'confirmed' AND check_in_date <= CURRENT_DATE AND check_out_date > CURRENT_DATE GROUP BY room_id)
-       SELECT r.room_type, SUM(r.total_rooms) - COALESCE(SUM(o.booked_now), 0) AS available_rooms
-       FROM rooms r LEFT JOIN occupied o ON o.room_id = r.room_id WHERE r.hotel_id = $1 GROUP BY r.room_type ORDER BY r.room_type`,
+      `WITH occupied AS (
+         SELECT room_id, SUM(number_of_rooms) AS booked_now
+           FROM bookings
+          WHERE hotel_id = $1
+            AND booking_status = 'confirmed'
+            AND check_in_date <= CURRENT_DATE
+            AND check_out_date > CURRENT_DATE
+          GROUP BY room_id
+       )
+       SELECT r.room_type,
+              SUM(r.total_rooms) - COALESCE(SUM(o.booked_now), 0) AS available_rooms
+         FROM rooms r
+         LEFT JOIN occupied o ON o.room_id = r.room_id
+        WHERE r.hotel_id = $1
+        GROUP BY r.room_type
+        ORDER BY r.room_type`,
       [hotel_id]
     );
 

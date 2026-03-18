@@ -34,6 +34,13 @@ function StaffDashboard() {
   // Pricing State
   const [recommendations, setRecommendations] = useState([]);
   const [pricingLoading, setPricingLoading] = useState(false);
+  const [availFrom, setAvailFrom] = useState(() => new Date().toISOString().slice(0,10));
+  const [availTo, setAvailTo] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10);
+  });
+  const [availability, setAvailability] = useState({ total_available: null, byType: [] });
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [useRange, setUseRange] = useState(false);
   const [pricingStartDate, setPricingStartDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const presetPeriods = ["7", "30", "90"];
@@ -53,11 +60,12 @@ function StaffDashboard() {
     if (activeTab === "analytics") {
       fetchAnalytics();
       fetchBookings();
+      fetchAvailability();
       fetchPricingRecommendations(); // also hydrate insights card while on analytics
     } else if (activeTab === "pricing") {
       fetchPricingRecommendations();
     }
-  }, [activeTab, period, pricingStartDate]);
+  }, [activeTab, period, pricingStartDate, availFrom, availTo, useRange]);
 
   useEffect(() => {
     fetchHotelProfile();
@@ -107,7 +115,10 @@ function StaffDashboard() {
     try {
       const token = localStorage.getItem("token");
       const config = { headers: { Authorization: `Bearer ${token}` } };
-      const res = await axios.get(`http://localhost:3000/api/staff/analytics?period=${period}`, config);
+      const params = useRange
+        ? `start_date=${availFrom}&end_date=${availTo}`
+        : `period=${period}`;
+      const res = await axios.get(`http://localhost:3000/api/staff/analytics?${params}`, config);
       setAnalytics(res.data);
     } catch (err) {
       console.error(err);
@@ -116,6 +127,26 @@ function StaffDashboard() {
       setLoading(false);
     }
   };
+
+  const fetchAvailability = async () => {
+    setAvailabilityLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await axios.get(`http://localhost:3000/api/staff/availability?check_in=${availFrom}&check_out=${availTo}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setAvailability({
+        total_available: res.data.total_available,
+        byType: (res.data.rooms || []).map(r => ({ room_type: r.room_type, available: r.available_rooms }))
+      });
+    } catch (err) {
+      console.error("Failed to fetch availability:", err);
+      setAvailability({ total_available: null, byType: [] });
+    } finally {
+      setAvailabilityLoading(false);
+    }
+  };
+
 
   const fetchPricingRecommendations = async () => {
     setPricingLoading(true);
@@ -369,58 +400,85 @@ function StaffDashboard() {
         {activeTab === "analytics" && analytics && (
           <div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-              <select
-                value={isCustomPeriod ? "custom" : period}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === "custom") {
-                    // switch to custom mode but don't fire fetch until number entered
-                    setPeriod(customPeriod || "custom");
-                    return;
-                  }
-                  setPeriod(val);
-                  setCustomPeriod("");
-                }}
-                style={{ 
-                  padding: "10px 14px", 
-                  borderRadius: "10px", 
-                  border: "1px solid rgba(255,255,255,0.12)", 
-                  background: "rgba(255,255,255,0.06)",
+              <button
+                onClick={() => setUseRange(!useRange)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "10px",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: useRange ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.06)",
                   color: "white",
                   boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-                  backdropFilter: "blur(8px)"
+                  backdropFilter: "blur(8px)",
+                  cursor: "pointer"
                 }}
               >
-                <option value="7">Last 7 Days</option>
-                <option value="30">Last 30 Days</option>
-                <option value="90">Last 90 Days</option>
-                <option value="custom">Custom…</option>
-              </select>
-              {isCustomPeriod && (
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  placeholder="Custom days"
-                  value={customPeriod}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setCustomPeriod(val);
-                    if (val && Number(val) > 0) {
+                {useRange ? "Using Date Range" : "Use Date Range"}
+              </button>
+
+              {!useRange && (
+                <>
+                  <select
+                    value={isCustomPeriod ? "custom" : period}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "custom") {
+                        setPeriod(customPeriod || "custom");
+                        return;
+                      }
                       setPeriod(val);
-                    }
-                  }}
-                  style={{
-                    width: "120px",
-                    padding: "10px 12px",
-                    borderRadius: "10px",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    background: "rgba(255,255,255,0.06)",
-                    color: "white",
-                    boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-                    backdropFilter: "blur(8px)"
-                  }}
-                />
+                      setCustomPeriod("");
+                    }}
+                    style={{ 
+                      padding: "10px 14px", 
+                      borderRadius: "10px", 
+                      border: "1px solid rgba(255,255,255,0.12)", 
+                      background: "rgba(255,255,255,0.06)",
+                      color: "white",
+                      boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                      backdropFilter: "blur(8px)"
+                    }}
+                  >
+                    <option value="7">Last 7 Days</option>
+                    <option value="30">Last 30 Days</option>
+                    <option value="90">Last 90 Days</option>
+                    <option value="custom">Custom…</option>
+                  </select>
+                  {isCustomPeriod && (
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      placeholder="Custom days"
+                      value={customPeriod}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCustomPeriod(val);
+                        if (val && Number(val) > 0) {
+                          setPeriod(val);
+                        }
+                      }}
+                      style={{
+                        width: "120px",
+                        padding: "10px 12px",
+                        borderRadius: "10px",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.06)",
+                        color: "white",
+                        boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+                        backdropFilter: "blur(8px)"
+                      }}
+                    />
+                  )}
+                </>
+              )}
+              {useRange && (
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                  <input type="date" value={availFrom} onChange={(e) => { setAvailFrom(e.target.value); }} style={{ ...formInput, width: "160px" }} />
+                  <span style={{ color: "#9ca3af" }}>→</span>
+                  <input type="date" value={availTo} onChange={(e) => { setAvailTo(e.target.value); }} style={{ ...formInput, width: "160px" }} />
+                  <button onClick={() => { fetchAnalytics(); fetchAvailability(); }} style={{ padding: "8px 12px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.16)", background: "#2563eb", color: "white", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>Update</button>
+                </div>
               )}
             </div>
 
@@ -467,15 +525,15 @@ function StaffDashboard() {
                 </div>
               </div>
 
-              {/* AVAILABLE ROOMS TODAY */}
+              {/* AVAILABLE ROOMS */}
               <div style={metricCardStyle}>
-                <div style={metricLabelStyle}>🏨 Rooms Available Today</div>
-                <div style={metricValueStyle}>{analytics.summary.available_rooms ?? "—"}</div>
-                <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>Remaining inventory right now</div>
-                {Array.isArray(analytics.summary.available_by_room_type) && analytics.summary.available_by_room_type.length > 0 && (
+              <div style={metricLabelStyle}>🏨 Room Availability</div>
+                <div style={metricValueStyle}>{availabilityLoading ? "…" : (availability.total_available ?? "—")}</div>
+                <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>Remaining inventory for selected dates</div>
+                {Array.isArray(availability.byType) && availability.byType.length > 0 && (
                   <div style={{ marginTop: "10px", fontSize: "12px", color: "#9ca3af", lineHeight: 1.5 }}>
-                    {analytics.summary.available_by_room_type.map((r) => (
-                      <div key={r.room_type} style={{ display: "flex", justifyContent: "space-between" }}>
+                    {availability.byType.map((r, idx) => (
+                      <div key={idx} style={{ display: "flex", justifyContent: "space-between" }}>
                         <span>{r.room_type}</span>
                         <span style={{ fontWeight: 700, color: "#e5e7eb" }}>{r.available}</span>
                       </div>
@@ -507,6 +565,7 @@ function StaffDashboard() {
                   <button onClick={() => setTrendChartType("bar")} style={{ padding: "6px 10px", borderRadius: "8px", border: trendChartType === "bar" ? "1px solid #60a5fa" : "1px solid rgba(255,255,255,0.12)", background: trendChartType === "bar" ? "rgba(96,165,250,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Bar</button>
                 </div>
               </div>
+              <div style={{ width: "100%", height: "100%", minWidth: 0, minHeight: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 {trendChartType === "line" ? (
                   <LineChart data={revenueTrendData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
@@ -527,11 +586,12 @@ function StaffDashboard() {
                     <YAxis yAxisId="right" orientation="right" tickFormatter={(val) => `${val}%`} tick={{fontSize: 12}} />
                     <Tooltip />
                     <Legend />
-                    <Bar yAxisId="left" dataKey="daily_revenue" name="Revenue" fill="#10b981" radius={[4,4,0,0]} />
-                    <Line yAxisId="right" type="monotone" dataKey="occupancy_pct" name="Occupancy %" stroke="#60a5fa" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
-                  </ComposedChart>
-                )}
+                  <Bar yAxisId="left" dataKey="daily_revenue" name="Revenue" fill="#10b981" radius={[4,4,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="occupancy_pct" name="Occupancy %" stroke="#60a5fa" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 6 }} />
+                </ComposedChart>
+              )}
               </ResponsiveContainer>
+              </div>
             </div>
 
             <div style={{ ...cardStyle, height: "360px", marginBottom: "20px", minWidth: 0 }}>
@@ -542,6 +602,7 @@ function StaffDashboard() {
                   <button onClick={() => setPayChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: payChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: payChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
                 </div>
               </div>
+              <div style={{ width: "100%", height: "100%", minWidth: 0, minHeight: 240 }}>
               <ResponsiveContainer width="100%" height="100%">
                 {payChartType === "stack" ? (
                   <ComposedChart data={paymentDailyData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
@@ -568,6 +629,7 @@ function StaffDashboard() {
                   </PieChart>
                 )}
               </ResponsiveContainer>
+              </div>
             </div>
 
             <div style={{ ...cardStyle, height: "350px", display: "flex", flexDirection: "column", minWidth: 0, marginBottom: "20px" }}>
@@ -578,6 +640,7 @@ function StaffDashboard() {
                   <button onClick={() => setRoomChartType("pie")} style={{ padding: "6px 10px", borderRadius: "8px", border: roomChartType === "pie" ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.12)", background: roomChartType === "pie" ? "rgba(16,185,129,0.12)" : "transparent", color: "#e5e7eb", cursor: "pointer" }}>Pie</button>
                 </div>
               </div>
+              <div style={{ width: "100%", height: "100%", minWidth: 0, minHeight: 220 }}>
               <ResponsiveContainer width="100%" height="100%">
                 {roomChartType === "bar" ? (
                   <BarChart data={analytics.revenue_by_room_type || []}>
@@ -598,6 +661,7 @@ function StaffDashboard() {
                   </PieChart>
                 )}
               </ResponsiveContainer>
+              </div>
             </div>
 
             {/* ALERTS & RECOMMENDATIONS */}

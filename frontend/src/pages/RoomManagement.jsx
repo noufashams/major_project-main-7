@@ -111,11 +111,15 @@ function RoomManagement() {
       }
 
       if (editingRoom) {
-        // For editing, we'll use the same endpoint but a PUT request.
-        // Note: Updating images on edit is more complex and might require a separate endpoint/logic.
-        // For this example, we'll focus on adding new rooms with images.
-        alert("Editing with image replacement is not implemented in this demo.");
-        return;
+        // Update existing room (without replacing images by default)
+        data.append("replace_images", "false");
+        await axios.put(`http://localhost:3000/api/rooms/${editingRoom.room_id}`, data, {
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "multipart/form-data"
+          },
+        });
+        alert("✅ Room updated!");
       } else {
         // Create new room with images
         await axios.post("http://localhost:3000/api/rooms", data, {
