@@ -117,6 +117,79 @@ db.connect()
     await db.query("ALTER TABLE hotels ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false");
     await db.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_source VARCHAR(50) DEFAULT 'web'");
     await db.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS device VARCHAR(50) DEFAULT 'desktop'");
+
+    // Physical room inventory (per-room numbers) and booking assignments
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS room_inventory (
+        room_physical_id SERIAL PRIMARY KEY,
+        hotel_id INT NOT NULL,
+        room_id INT NOT NULL,
+        room_number VARCHAR(50) NOT NULL,
+        status VARCHAR(20) DEFAULT 'available',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(room_id, room_number),
+        FOREIGN KEY (hotel_id) REFERENCES hotels(hotel_id) ON DELETE CASCADE,
+        FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
+      )
+    `);
+    // Backfill missing columns for legacy tables
+    await db.query(`ALTER TABLE room_inventory ADD COLUMN IF NOT EXISTS room_number VARCHAR(50) NOT NULL DEFAULT 'Room'`);
+    await db.query(`ALTER TABLE room_inventory ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'available'`);
+    // Backfill column/PK if table existed without them
+    await db.query(`ALTER TABLE room_inventory ADD COLUMN IF NOT EXISTS room_physical_id SERIAL`);
+    await db.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints 
+          WHERE table_name = 'room_inventory' AND constraint_type = 'PRIMARY KEY'
+        ) THEN
+          ALTER TABLE room_inventory ADD PRIMARY KEY (room_physical_id);
+        END IF;
+      END$$;
+    `);
+    // Renumber any legacy rows that still have the placeholder 'Room'
+    await db.query(`
+      WITH numbered AS (
+        SELECT room_physical_id,
+               CONCAT('Room ', ROW_NUMBER() OVER (PARTITION BY room_id ORDER BY room_physical_id)) AS new_num
+        FROM room_inventory
+        WHERE room_number IS NULL OR room_number = 'Room'
+      )
+      UPDATE room_inventory ri
+         SET room_number = n.new_num
+        FROM numbered n
+       WHERE ri.room_physical_id = n.room_physical_id
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS booking_assigned_rooms (
+        booking_id INT NOT NULL REFERENCES bookings(booking_id) ON DELETE CASCADE,
+        room_physical_id INT NOT NULL REFERENCES room_inventory(room_physical_id) ON DELETE CASCADE,
+        room_number VARCHAR(50) NOT NULL,
+        PRIMARY KEY (booking_id, room_physical_id)
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS booking_items (
+        booking_item_id SERIAL PRIMARY KEY,
+        booking_id INT NOT NULL REFERENCES bookings(booking_id) ON DELETE CASCADE,
+        room_id INT NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+        quantity INT NOT NULL DEFAULT 1,
+        adults INT DEFAULT 1,
+        children INT DEFAULT 0
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS hotel_attractions (
+        attraction_id SERIAL PRIMARY KEY,
+        hotel_id INT NOT NULL REFERENCES hotels(hotel_id) ON DELETE CASCADE,
+        name VARCHAR(150) NOT NULL,
+        description TEXT,
+        distance_km NUMERIC(6,2),
+        category VARCHAR(80),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   } catch (e) {
     console.error("Failed to ensure columns:", e.message);
   }
@@ -178,6 +251,8 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
   const roomsRequested = Math.max(1, parseInt(number_of_rooms, 10) || 1);
 
   if (!check_in || !check_out) return res.status(400).json({ message: "Check-in and check-out dates are required." });
+  if (!hotel_id) return res.status(400).json({ message: "Hotel is required." });
+  if (!guest_name || !guest_phone) return res.status(400).json({ message: "Guest name and phone are required." });
 
   const checkInDate = new Date(check_in);
   const checkOutDate = new Date(check_out);
@@ -209,6 +284,24 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
     const totalRooms = roomCheck.rows[0].total_rooms;
     const roomCapacity = roomCheck.rows[0].capacity || 0;
 
+    // Ensure physical inventory exists for this room type
+    const invCountRes = await db.query(
+      `SELECT COUNT(*) AS cnt FROM room_inventory WHERE room_id = $1`,
+      [room_id]
+    );
+    const invCount = parseInt(invCountRes.rows[0].cnt) || 0;
+    if (invCount === 0) {
+      const values = [];
+      for (let i = 1; i <= totalRooms; i++) {
+        values.push(`(${hotel_id}, ${room_id}, 'Room ${i}')`);
+      }
+      if (values.length) {
+        await db.query(
+          `INSERT INTO room_inventory (hotel_id, room_id, room_number) VALUES ${values.join(",")}`
+        );
+      }
+    }
+
     const overlapCheck = await db.query(
       `SELECT COALESCE(MAX(daily_booked), 0) as booked_count
        FROM (
@@ -230,10 +323,30 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
       return res.status(400).json({ message: "Not enough rooms available for these dates." });
     }
 
-    const totalGuests = (parseInt(adults) || 0) + (parseInt(children) || 0);
-    if (roomCapacity > 0 && totalGuests > roomCapacity * roomsRequested) {
+    // Reserve specific physical rooms for this stay window
+    const availableRoomsRes = await db.query(
+      `SELECT ri.room_physical_id, ri.room_number
+         FROM room_inventory ri
+        WHERE ri.room_id = $1
+          AND ri.status = 'available'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM booking_assigned_rooms bar
+              JOIN bookings b ON b.booking_id = bar.booking_id
+             WHERE bar.room_physical_id = ri.room_physical_id
+               AND b.booking_status = 'confirmed'
+               AND b.check_in_date < $3
+               AND b.check_out_date > $2
+          )
+        ORDER BY ri.room_physical_id
+        LIMIT $4
+        FOR UPDATE SKIP LOCKED`,
+      [room_id, checkInISO, checkOutISO, roomsRequested]
+    );
+
+    if (availableRoomsRes.rows.length < roomsRequested) {
       await db.query("ROLLBACK");
-      return res.status(400).json({ message: `Room capacity exceeded. Max ${roomCapacity * roomsRequested} guests.` });
+      return res.status(400).json({ message: "No specific rooms left for these dates." });
     }
 
     const payOnArrival = String(pay_on_arrival) === "true";
@@ -244,12 +357,22 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
       `INSERT INTO bookings
        (hotel_id, room_id, guest_name, guest_phone, guest_email, check_in_date, check_out_date, number_of_rooms, booking_status, payment_status, transaction_id, booking_ref, adults, children, license_file_path, booking_source, device)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', $9, $10, $11, $12, $13, $14, $15, $16)
-       RETURNING booking_ref`,
+       RETURNING booking_ref, booking_id`,
       [hotel_id, room_id, guest_name, guest_phone, guest_email || null, checkInISO, checkOutISO, roomsRequested, payOnArrival ? 'pending' : 'paid', fakeTxnId, bookingRef, adults, children, licensePath, bookingSource, device]
     );
 
+    // Link assigned rooms to booking
+    const assignedRooms = availableRoomsRes.rows.slice(0, roomsRequested);
+    for (const r of assignedRooms) {
+      await db.query(
+        `INSERT INTO booking_assigned_rooms (booking_id, room_physical_id, room_number) VALUES ($1, $2, $3)`,
+        [bookingResult.rows[0].booking_id, r.room_physical_id, r.room_number]
+      );
+    }
+
     let emailSent = false;
     let emailError = null;
+    const assignedRoomNumbers = assignedRooms.map(r => r.room_number);
     if (guest_email) {
       try {
         const hasHost = process.env.SMTP_HOST || process.env.SMTP_URL;
@@ -260,7 +383,7 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
             from: process.env.SMTP_FROM || "no-reply@stayos.com",
             to: guest_email,
             subject: `Booking Confirmed - Ref ${bookingRef}`,
-            text: `Thank you for your booking!\n\nReference: ${bookingRef}\nCheck-in: ${checkInISO}\nCheck-out: ${checkOutISO}\nPayment: ${payOnArrival ? 'Pay on Arrival' : 'Paid'}\n\nWe look forward to hosting you.`,
+            text: `Thank you for your booking!\n\nReference: ${bookingRef}\nCheck-in: ${checkInISO}\nCheck-out: ${checkOutISO}\nRooms: ${assignedRoomNumbers.join(", ")}\nPayment: ${payOnArrival ? 'Pay on Arrival' : 'Paid'}\n\nWe look forward to hosting you.`,
           });
           emailSent = true;
         }
@@ -277,12 +400,14 @@ app.post("/api/bookings", optionalLicenseUpload, async (req, res) => {
       guest_name: guest_name,
       room_type: roomCheck.rows[0].room_type,
       nights: nights,
-      ref: bookingResult.rows[0].booking_ref
+      ref: bookingResult.rows[0].booking_ref,
+      rooms: assignedRoomNumbers
     });
 
     res.json({ 
       message: "Booking confirmed successfully!",
       booking_ref: bookingResult.rows[0].booking_ref,
+      rooms_assigned: assignedRoomNumbers,
       email_sent: emailSent,
       email_error: emailError
     });
@@ -362,6 +487,8 @@ app.post("/api/hotels/register", upload.single('license_file'), async (req, res)
 app.get("/api/hotels/search", async (req, res) => {
   const searchQuery = (req.query.q || "").trim();
   const location = (req.query.location || "").trim();
+  const minPrice = req.query.min_price ? Number(req.query.min_price) : null;
+  const maxPrice = req.query.max_price ? Number(req.query.max_price) : null;
 
   if (!searchQuery && !location) return res.status(400).json({ message: "Provide a search term or location" });
 
@@ -378,6 +505,24 @@ app.get("/api/hotels/search", async (req, res) => {
       conditions.push(`LOWER(TRIM(location)) = LOWER(TRIM($${params.length}))`);
     }
 
+    // Price filters (based on room price_per_night)
+    if (Number.isFinite(minPrice) && Number.isFinite(maxPrice)) {
+      params.push(minPrice, maxPrice);
+      conditions.push(
+        `EXISTS (SELECT 1 FROM rooms r WHERE r.hotel_id = h.hotel_id AND r.price_per_night BETWEEN $${params.length-1} AND $${params.length})`
+      );
+    } else if (Number.isFinite(minPrice)) {
+      params.push(minPrice);
+      conditions.push(
+        `EXISTS (SELECT 1 FROM rooms r WHERE r.hotel_id = h.hotel_id AND r.price_per_night >= $${params.length})`
+      );
+    } else if (Number.isFinite(maxPrice)) {
+      params.push(maxPrice);
+      conditions.push(
+        `EXISTS (SELECT 1 FROM rooms r WHERE r.hotel_id = h.hotel_id AND r.price_per_night <= $${params.length})`
+      );
+    }
+
     conditions.push("h.is_verified = true");
     const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -385,6 +530,7 @@ app.get("/api/hotels/search", async (req, res) => {
       `SELECT h.hotel_id, h.hotel_name, h.location, h.slug,
               COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 2) FROM hotel_ratings r WHERE r.hotel_id = h.hotel_id), 0) AS avg_rating,
               COALESCE((SELECT COUNT(*) FROM hotel_ratings r WHERE r.hotel_id = h.hotel_id), 0) AS rating_count,
+              COALESCE((SELECT MIN(r.price_per_night) FROM rooms r WHERE r.hotel_id = h.hotel_id), 0) AS min_price,
               (
                 SELECT 'http://localhost:3000/' || rp.picture_url
                 FROM rooms r
@@ -1196,12 +1342,21 @@ app.post("/api/guest/query", async (req, res) => {
     const hotelAmenities = amenitiesResult.rows.map(a => a.amenity_name).join(", ");
 
     const hotelInfo = hotelResult.rows[0];
-    const hotelContext = {
+    const attractionsRes = await db.query(
+      `SELECT name, description, COALESCE(distance_km, 0) AS distance_km, category 
+         FROM hotel_attractions 
+        WHERE hotel_id = $1 
+        ORDER BY distance_km NULLS LAST, name
+        LIMIT 10`,
+      [hotel_id]
+    );
+  const hotelContext = {
       hotel_id: hotel_id, hotel_name: hotelInfo.hotel_name, location: hotelInfo.location, description: hotelInfo.description || "", address: hotelInfo.address || "",
       google_maps: hotelInfo.google_maps_url || "", contact: `${hotelInfo.contact_phone || ""} | ${hotelInfo.contact_email || ""}`,
       amenities: hotelAmenities || "Standard hotel amenities", target_check_in: check_in, target_check_out: check_out,
       datesProvided: !!(req.body.check_in && req.body.check_out), 
-      rooms: roomsResult.rows.map(r => ({ room_id: r.room_id, type: r.type, price: parseInt(r.price), available: Math.max(0, parseInt(r.available)), description: r.description || "", capacity: parseInt(r.capacity) || 2, amenities: r.room_amenities || "Standard amenities" }))
+      rooms: roomsResult.rows.map(r => ({ room_id: r.room_id, type: r.type, price: parseInt(r.price), available: Math.max(0, parseInt(r.available)), description: r.description || "", capacity: parseInt(r.capacity) || 2, amenities: r.room_amenities || "Standard amenities" })),
+      attractions: attractionsRes.rows || []
     };
 
     const aiResult = await processGuestQuery(query_text, hotelContext, chatState);
@@ -1250,10 +1405,15 @@ app.post("/api/guest/cancel-booking", async (req, res) => {
 app.get("/api/pricing/recommendations", verifyToken, async (req, res) => {
   const hotelId = req.user.hotel_id;
   const daysAhead = parseInt(req.query.days) || 7;
+  const startDate = req.query.start_date || null;
   try {
-    const recommendations = await getPricingRecommendations(db, hotelId, daysAhead);
-    res.json({ hotel_id: hotelId, total_recommendations: recommendations.length, days_ahead: daysAhead, recommendations });
+    const recommendations = await getPricingRecommendations(db, hotelId, daysAhead, startDate);
+    res.json({ hotel_id: hotelId, total_recommendations: recommendations.length, days_ahead: daysAhead, start_date: startDate, recommendations });
   } catch (err) {
+    if (err.message?.includes("Invalid start date")) {
+      return res.status(400).json({ message: "start_date must be ISO YYYY-MM-DD" });
+    }
+    console.error("Pricing recommendations failed:", err.message);
     res.status(500).json({ message: "Failed to get recommendations" });
   }
 });

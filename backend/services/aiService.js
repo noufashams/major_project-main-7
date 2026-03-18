@@ -36,6 +36,12 @@ function buildFallbackReply(hotelContext) {
   return `I'm here to help with ${hotelContext.hotel_name || "this hotel"}. ${roomLines ? "Options: " + roomLines + "." : ""} Ask anything or tell me which room you want to book.`;
 }
 
+function parseLatLngFromMapsUrl(url = "") {
+  const match = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (match) return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+  return null;
+}
+
 // Simple Levenshtein distance for fuzzy room matching
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
@@ -83,6 +89,33 @@ async function fetchWithTimeout(url, options, timeoutMs = 6000) {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(id);
+  }
+}
+
+async function fetchNearbyPlaces(lat, lng, typeQuery, radiusMeters = 5000, cacheTag = "places") {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey || lat == null || lng == null) return null;
+
+  const cacheKey = `${cacheTag}:${lat.toFixed(4)}:${lng.toFixed(4)}:${radiusMeters}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radiusMeters}&type=${typeQuery}&key=${apiKey}`;
+  try {
+    const resp = await fetchWithTimeout(url, { method: "GET" }, 5000);
+    const data = await resp.json();
+    if (!data || !Array.isArray(data.results)) return null;
+    const simplified = data.results.slice(0, 6).map((p) => ({
+      name: p.name,
+      description: p.vicinity || p.formatted_address || "",
+      distance_km: null,
+      category: (p.types || []).slice(0, 2).join(", ")
+    }));
+    setCache(cacheKey, simplified, 1000 * 60 * 60 * 6); // 6h
+    return simplified;
+  } catch (err) {
+    console.error("Places API fetch failed:", err.message);
+    return null;
   }
 }
 
@@ -488,6 +521,8 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
 
   let intent = "conversational";
   let response = "";
+  const wantsAttraction = /\b(attraction|tourist|nearby place|visit|sightseeing|things to do|places to see|nearby|around here)\b/.test(text);
+  const wantsPetrol = /\b(petrol|gas station|fuel|diesel|pump)\b/.test(text);
 
   // 2. Handle Cancellations / Reset
   if (text === "cancel" || text.includes("start over") || text.includes("nevermind")) {
@@ -495,6 +530,35 @@ export async function processGuestQuery(query, hotelContext, currentState = {}) 
        intent: "cancelled",
        response: "No problem, I've cleared your booking progress. What else can I help you with?",
        chatState: {} // Wipe memory
+    };
+  }
+
+  // Attractions / Petrol intent
+  if (wantsAttraction || wantsPetrol) {
+    const isPetrol = wantsPetrol;
+    let places = hotelContext.attractions || [];
+    const latlng = hotelContext.google_maps ? parseLatLngFromMapsUrl(hotelContext.google_maps) : null;
+    if ((!places || places.length === 0) && latlng) {
+      const typeQuery = isPetrol ? "gas_station" : "tourist_attraction|point_of_interest";
+      const live = await fetchNearbyPlaces(latlng.lat, latlng.lng, typeQuery, 5000, isPetrol ? "gas" : "places");
+      if (live) places = live;
+    }
+    if (places && places.length > 0) {
+      const top = places.slice(0, 3).map((a) => {
+        const dist = a.distance_km ? `${parseFloat(a.distance_km).toFixed(1)} km` : "nearby";
+        return `- ${a.name}${a.category ? ` (${a.category})` : ""}${a.description ? ` — ${a.description}` : ""}${dist !== "nearby" ? ` [${dist}]` : ""}`;
+      }).join("\n");
+      return {
+        intent: isPetrol ? "petrol" : "attractions",
+        response: `Here are nearby ${isPetrol ? "fuel stations" : "spots"}:\n${top}\nWant directions or more options?`,
+        chatState: state
+      };
+    }
+    const mapsLink = hotelContext.google_maps ? ` You can open our map: ${hotelContext.google_maps}` : "";
+    return {
+      intent: isPetrol ? "petrol" : "attractions",
+      response: `I can’t fetch live nearby ${isPetrol ? "fuel stations" : "places"} right now.${mapsLink}`,
+      chatState: state
     };
   }
 

@@ -4,17 +4,128 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ========== HELPER FUNCTIONS ==========
+// ========== HOLIDAY SOURCE (ICS with fallback) ==========
 
-function isIndianHoliday(date) {
-  const fixedHolidays = [
-    "01-26", "03-08", "03-25", "04-11", "04-17", "04-21",
-    "05-23", "08-15", "08-26", "09-16", "10-02", "10-12",
-    "10-24", "10-25", "11-01", "12-25",
-  ];
+let holidayCache = {
+  lastFetched: 0,
+  days: new Set(),      // strings like "MM-DD"
+  labels: new Map(),    // "MM-DD" -> "Holiday Name"
+  source: "fallback"    // "ics" | "fallback"
+};
+
+const parseIcsToDayMap = (icsText) => {
+  const days = new Set();
+  const labels = new Map();
+  const lines = icsText.split(/\r?\n/);
+  let currentDate = null;
+  let currentSummary = null;
+
+  const flush = () => {
+    if (currentDate) {
+      days.add(currentDate);
+      labels.set(currentDate, currentSummary || "Holiday");
+    }
+    currentDate = null;
+    currentSummary = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === "BEGIN:VEVENT") {
+      currentDate = null;
+      currentSummary = null;
+    } else if (line.startsWith("DTSTART")) {
+      const match = line.match(/:(\d{8})$/);
+      if (match) {
+        const m = match[1].slice(4, 6);
+        const d = match[1].slice(6, 8);
+        currentDate = `${m}-${d}`;
+      }
+    } else if (line.startsWith("SUMMARY")) {
+      const summaryMatch = line.match(/^SUMMARY[^:]*:(.*)$/);
+      if (summaryMatch) currentSummary = summaryMatch[1].trim();
+    } else if (line === "END:VEVENT") {
+      flush();
+    }
+  }
+  flush();
+  return { days, labels, source: "ics" };
+};
+
+const fetcher = async (...args) => {
+  if (typeof fetch !== "undefined") return fetch(...args);
+  const mod = await import("node-fetch");
+  return mod.default(...args);
+};
+
+const getHolidayUrls = () => {
+  // Allow comma-separated list; trims whitespace; filters empties
+  const raw = process.env.HOLIDAY_ICS_URL || process.env.HOLIDAY_ICS_URLS || "";
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+};
+
+const fetchHolidaySet = async () => {
+  const urls = getHolidayUrls();
+  if (!urls.length) return null;
+
+  const aggregate = { days: new Set(), labels: new Map(), source: "ics" };
+
+  for (const url of urls) {
+    try {
+      const res = await fetcher(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const parsed = parseIcsToDayMap(text);
+      // Merge results; later feeds overwrite labels on collisions
+      parsed.days.forEach((d) => aggregate.days.add(d));
+      parsed.labels.forEach((v, k) => aggregate.labels.set(k, v));
+      aggregate.source = "ics";
+    } catch (err) {
+      console.error(`Holiday ICS fetch failed for ${url}:`, err.message);
+    }
+  }
+
+  return aggregate.days.size ? aggregate : null;
+};
+
+const getHolidaySet = async () => {
+  const ttlHours = parseInt(process.env.HOLIDAY_REFRESH_HOURS || "12", 10);
+  const now = Date.now();
+  const stale = now - holidayCache.lastFetched > ttlHours * 60 * 60 * 1000;
+  if (!holidayCache.days.size || stale) {
+    const fetched = await fetchHolidaySet();
+    if (fetched && fetched.days && fetched.days.size) {
+      holidayCache = { lastFetched: now, days: fetched.days, labels: fetched.labels, source: fetched.source };
+    } else if (!holidayCache.days.size) {
+      // populate with static India defaults as ultimate fallback
+      holidayCache = {
+        lastFetched: now,
+        days: new Set([
+          "01-26", "03-08", "03-25", "04-11", "04-17", "04-21",
+          "05-23", "08-15", "08-26", "09-16", "10-02", "10-12",
+          "10-24", "10-25", "11-01", "12-25",
+        ]),
+        labels: new Map(),
+        source: "fallback"
+      };
+    }
+  }
+  return holidayCache;
+};
+
+async function getHolidayInfo(date) {
+  const { days, labels, source } = await getHolidaySet();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-  return fixedHolidays.includes(`${month}-${day}`);
+  const key = `${month}-${day}`;
+  return {
+    isHoliday: days.has(key),
+    name: labels.get(key) || "Holiday",
+    source
+  };
 }
 
 function isWeekend(date) {
@@ -85,8 +196,20 @@ async function getBookingVelocity(db, roomId) {
   }
 }
 
-async function getBasePrice(db, hotelId, roomId) {
+async function getBasePrice(db, hotelId, roomId, dateString = null) {
   try {
+    // If a date is provided, honor per-date overrides first
+    if (dateString) {
+      const overrideRes = await db.query(
+        `SELECT custom_price FROM room_price_overrides 
+         WHERE hotel_id = $1 AND room_id = $2 AND target_date = $3`,
+        [hotelId, roomId, dateString]
+      );
+      if (overrideRes.rows.length > 0) {
+        return Number(overrideRes.rows[0].custom_price);
+      }
+    }
+
     const result = await db.query(
       `SELECT price_per_night FROM rooms WHERE room_id = $1 AND hotel_id = $2`,
       [roomId, hotelId]
@@ -105,11 +228,11 @@ export async function calculateOptimalPrice(db, hotelId, roomId, bookingDate) {
     const dateString = bookingDate.toISOString().split('T')[0];
     
     // ========== STEP 1: Gather Intel ==========
-    const basePrice = await getBasePrice(db, hotelId, roomId);
+    const basePrice = await getBasePrice(db, hotelId, roomId, dateString);
     const occupancyRate = await getDateSpecificOccupancy(db, roomId, dateString);
     const recentBookings = await getBookingVelocity(db, roomId);
     const daysUntil = getDaysUntil(bookingDate);
-    const isHoliday = isIndianHoliday(bookingDate);
+    const { isHoliday: holiday, name: holidayName, source: holidaySource } = await getHolidayInfo(bookingDate);
     const weekend = isWeekend(bookingDate);
     const seasonalFactor = getSeasonalFactor(bookingDate);
 
@@ -140,8 +263,8 @@ export async function calculateOptimalPrice(db, hotelId, roomId, bookingDate) {
     }
 
     // D. SEASONALITY & EVENTS
-    if (isHoliday) {
-      m_seas *= 1.30; reasons.push("Holiday surcharge");
+    if (holiday && holidaySource === "ics") {
+      m_seas *= 1.30; reasons.push(`Holiday surcharge (${holidayName})`);
     } else if (weekend) {
       m_seas *= 1.15; reasons.push("Weekend premium");
     }
@@ -171,7 +294,7 @@ export async function calculateOptimalPrice(db, hotelId, roomId, bookingDate) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         hotelId, roomId, dateString, basePrice, calculatedPrice,
-        occupancyRate, daysUntil, weekend, isHoliday, 
+        occupancyRate, daysUntil, weekend, holiday, 
         seasonalFactor > 1 ? "peak" : seasonalFactor < 1 ? "low" : "normal",
         finalMultiplier, reasons.join(" | ")
       ]
@@ -186,7 +309,9 @@ export async function calculateOptimalPrice(db, hotelId, roomId, bookingDate) {
         occupancy_rate: occupancyRate.toFixed(1),
         days_until: daysUntil,
         is_weekend: weekend,
-        is_holiday: isHoliday,
+        is_holiday: holiday && holidaySource === "ics",
+        holiday_name: holiday && holidaySource === "ics" ? holidayName : null,
+        holiday_source: holidaySource,
         velocity_surge: recentBookings >= 3
       },
       reasons: reasons.length > 0 ? reasons : ["Standard pricing"],
@@ -232,7 +357,7 @@ export async function calculateOptimalPrice(db, hotelId, roomId, bookingDate) {
 //     throw err;
 //   }
 // }
-export async function getPricingRecommendations(db, hotelId, daysAhead = 7) {
+export async function getPricingRecommendations(db, hotelId, daysAhead = 7, startDateString = null) {
   try {
     const recommendations = [];
     const roomsResult = await db.query(
@@ -240,10 +365,13 @@ export async function getPricingRecommendations(db, hotelId, daysAhead = 7) {
       [hotelId]
     );
 
+    // Allow caller to seed calculations from a chosen calendar date
+    const startDate = startDateString ? new Date(startDateString) : new Date();
+    if (Number.isNaN(startDate.getTime())) throw new Error("Invalid start date");
+
     for (const room of roomsResult.rows) {
-      const today = new Date();
       for (let i = 0; i < daysAhead; i++) {
-        const futureDate = new Date(today);
+        const futureDate = new Date(startDate);
         futureDate.setDate(futureDate.getDate() + i);
 
         const pricing = await calculateOptimalPrice(db, hotelId, room.room_id, futureDate);
@@ -277,12 +405,6 @@ export async function applyRecommendedPrice(db, hotelId, roomId, targetDate, new
        DO UPDATE SET custom_price = EXCLUDED.custom_price, created_at = CURRENT_TIMESTAMP
        RETURNING override_id, room_id, target_date, custom_price`,
       [hotelId, roomId, targetDate, newPrice]
-    );
-
-    // Also update the base price so default views reflect the change immediately
-    await db.query(
-      `UPDATE rooms SET price_per_night = $1 WHERE hotel_id = $2 AND room_id = $3`,
-      [newPrice, hotelId, roomId]
     );
 
     console.log(

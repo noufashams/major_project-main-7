@@ -34,6 +34,7 @@ function StaffDashboard() {
   // Pricing State
   const [recommendations, setRecommendations] = useState([]);
   const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingStartDate, setPricingStartDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const presetPeriods = ["7", "30", "90"];
   const isCustomPeriod = !presetPeriods.includes(period);
@@ -56,7 +57,7 @@ function StaffDashboard() {
     } else if (activeTab === "pricing") {
       fetchPricingRecommendations();
     }
-  }, [activeTab, period]);
+  }, [activeTab, period, pricingStartDate]);
 
   useEffect(() => {
     fetchHotelProfile();
@@ -120,7 +121,7 @@ function StaffDashboard() {
     setPricingLoading(true);
     try {
       const token = localStorage.getItem("token");
-      const res = await axios.get(`http://localhost:3000/api/pricing/recommendations?days=7`, {
+      const res = await axios.get(`http://localhost:3000/api/pricing/recommendations?days=7&start_date=${pricingStartDate}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRecommendations(res.data.recommendations || []);
@@ -812,6 +813,21 @@ function StaffDashboard() {
               <p style={{ color: "#4b5563", marginTop: "5px" }}>
                 The AI automatically analyzes occupancy, seasonality, and booking velocity to suggest optimal daily rates.
               </p>
+              <div style={{ display: "flex", gap: "12px", alignItems: "center", marginTop: "12px" }}>
+                <label style={{ fontWeight: 600, color: "#374151" }}>Start from date:</label>
+                <input
+                  type="date"
+                  value={pricingStartDate}
+                  onChange={(e) => setPricingStartDate(e.target.value)}
+                  style={{ padding: "8px 10px", borderRadius: "8px", border: "1px solid #e5e7eb" }}
+                />
+                <button
+                  onClick={fetchPricingRecommendations}
+                  style={{ padding: "8px 14px", borderRadius: "8px", background: "#2563eb", color: "white", border: "none", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             {pricingLoading ? (
@@ -831,6 +847,18 @@ function StaffDashboard() {
                         {new Date(rec.target_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                       </span>
                     </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px" }}>
+                      {rec.factors?.is_holiday && rec.factors?.holiday_source === "ics" && (
+                        <span style={{ background: "#fee2e2", color: "#b91c1c", padding: "4px 8px", borderRadius: "8px", fontWeight: 700, fontSize: "12px" }}>
+                          🎉 {rec.factors.holiday_name || "Holiday"}
+                        </span>
+                      )}
+                      {rec.factors?.is_weekend && (
+                        <span style={{ background: "#e0f2fe", color: "#0369a1", padding: "4px 8px", borderRadius: "8px", fontWeight: 700, fontSize: "12px" }}>
+                          📅 Weekend
+                        </span>
+                      )}
+                    </div>
                     
                     <div style={{ display: "flex", alignItems: "center", gap: "15px", marginBottom: "15px", backgroundColor: "#f9fafb", padding: "12px", borderRadius: "8px" }}>
                       <div>
@@ -846,7 +874,7 @@ function StaffDashboard() {
 
                     <div style={{ fontSize: "14px", color: "#4b5563", marginBottom: "20px", display: "flex", gap: "8px", alignItems: "flex-start" }}>
                       <span>💡</span>
-                      <span>{rec.reason || "Algorithm detected sudden demand spike for these dates."}</span>
+                      <span>{rec.reasons?.join(" | ") || rec.reason || "Algorithm detected sudden demand spike for these dates."}</span>
                     </div>
 
                     <button 

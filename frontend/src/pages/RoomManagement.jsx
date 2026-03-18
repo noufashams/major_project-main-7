@@ -7,6 +7,7 @@ function RoomManagement() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingRoom, setEditingRoom] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [roomTypeChoice, setRoomTypeChoice] = useState("custom");
 
   const [formData, setFormData] = useState({
     room_type: "",
@@ -20,6 +21,17 @@ function RoomManagement() {
   // State to hold selected image files
   const [pictures, setPictures] = useState([]);
   const [selectedAmenities, setSelectedAmenities] = useState([]);
+  const roomTypeOptions = [
+    "Standard Room",
+    "Deluxe Room",
+    "Superior Room",
+    "Executive Room",
+    "Suite",
+    "Family Room",
+    "Studio",
+    "Villa",
+    "Cottage"
+  ];
 
   const amenityOptions = [
     "WiFi",
@@ -134,6 +146,7 @@ function RoomManagement() {
 
   const handleEditRoom = (room) => {
     setEditingRoom(room);
+    setRoomTypeChoice(roomTypeOptions.includes(room.room_type) ? room.room_type : "custom");
     setFormData({
       room_type: room.room_type,
       description: room.description || "",
@@ -184,6 +197,7 @@ function RoomManagement() {
             onClick={() => {
               setShowAddForm(!showAddForm);
               setEditingRoom(null);
+              setRoomTypeChoice("custom");
               setFormData({
                 room_type: "", description: "", capacity: 2,
                 price_per_night: 0, total_rooms: 1, amenities: [],
@@ -204,7 +218,30 @@ function RoomManagement() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div>
                   <label style={labelStyle}>Room Name / Type *</label>
-                  <input type="text" value={formData.room_type} onChange={(e) => setFormData({ ...formData, room_type: e.target.value })} style={inputStyle} required />
+                  <select
+                    value={roomTypeChoice}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRoomTypeChoice(val);
+                      setFormData({ ...formData, room_type: val === "custom" ? "" : val });
+                    }}
+                    style={{ ...inputStyle, color: "#0f172a" }}
+                  >
+                    <option value="custom">Custom...</option>
+                    {roomTypeOptions.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                  {roomTypeChoice === "custom" && (
+                    <input
+                      type="text"
+                      value={formData.room_type}
+                      onChange={(e) => setFormData({ ...formData, room_type: e.target.value })}
+                      style={{ ...inputStyle, marginTop: "8px" }}
+                      placeholder="Enter room name/type"
+                      required
+                    />
+                  )}
                 </div>
                 <div>
                   <label style={labelStyle}>Price Per Night (₹) *</label>

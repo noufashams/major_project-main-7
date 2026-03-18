@@ -100,6 +100,8 @@ function HotelSearch() {
     const rb = Number(b.avg_rating || 0);
     if (sortOption === "rating_desc") return rb - ra;
     if (sortOption === "reviews_desc") return (b.rating_count || 0) - (a.rating_count || 0);
+    if (sortOption === "price_asc") return (Number(a.min_price || 0)) - (Number(b.min_price || 0));
+    if (sortOption === "price_desc") return (Number(b.min_price || 0)) - (Number(a.min_price || 0));
     return 0; // relevance (as returned)
   });
 
@@ -206,6 +208,8 @@ function HotelSearch() {
             >
               <option value="rating_desc">Highest Rated</option>
               <option value="reviews_desc">Most Reviewed</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
             </select>
           </div>
         </div>
@@ -283,6 +287,9 @@ function HotelSearch() {
               <div>
                 <h3 style={{ margin: "0 0 4px 0", fontSize: "20px", color: "#f8fafc" }}>{hotel.hotel_name}</h3>
                 <p style={{ margin: 0, color: "#cbd5e1" }}>{hotel.location}</p>
+                <p style={{ margin: "6px 0 4px 0", color: "#f8fafc", fontWeight: 700 }}>
+                  From ₹{hotel.min_price ? Number(hotel.min_price).toFixed(0) : "—"} / night
+                </p>
                 <p style={{ margin: "6px 0 6px 0", color: "#fbbf24", fontSize: "14px", fontWeight: 600, display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                   <span>⭐ {Number(hotel.avg_rating || 0).toFixed(1)} ({hotel.rating_count || 0} reviews)</span>
                   <button
