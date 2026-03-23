@@ -787,6 +787,106 @@ app.get("/api/staff/hotel", verifyToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// STAFF: Daily operations summary (revenue, bookings, occupancy, low inventory)
+// ==========================================
+app.get("/api/staff/daily-summary", verifyToken, async (req, res) => {
+  const hotelId = req.user?.hotel_id;
+  if (!hotelId) return res.status(403).json({ message: "Unauthorized" });
+
+  const day = req.query.date ? new Date(req.query.date) : new Date();
+  if (Number.isNaN(day.getTime())) return res.status(400).json({ message: "Invalid date. Use YYYY-MM-DD." });
+
+  // Normalize to start of day UTC to keep boundaries consistent
+  const start = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const startISO = start.toISOString().slice(0, 10);
+  const endISO = end.toISOString().slice(0, 10);
+
+  try {
+    const revenue = await db.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN b.payment_status = 'paid'
+           THEN r.price_per_night * b.number_of_rooms * GREATEST(1, (b.check_out_date - b.check_in_date)) END), 0) AS revenue_paid,
+         COALESCE(SUM(CASE WHEN b.payment_status <> 'paid'
+           THEN r.price_per_night * b.number_of_rooms * GREATEST(1, (b.check_out_date - b.check_in_date)) END), 0) AS revenue_poa,
+         COUNT(*) FILTER (WHERE b.booking_status = 'confirmed') AS bookings_new,
+         COUNT(*) FILTER (WHERE b.booking_status = 'cancelled') AS bookings_cancelled
+       FROM bookings b
+       JOIN rooms r ON r.room_id = b.room_id
+       WHERE b.hotel_id = $1
+         AND b.created_at >= $2::date
+         AND b.created_at < $3::date`,
+      [hotelId, startISO, endISO]
+    );
+
+    const occupancy = await db.query(
+      `WITH totals AS (
+         SELECT COALESCE(SUM(total_rooms), 0) AS total_rooms
+           FROM rooms
+          WHERE hotel_id = $1
+       ), occ AS (
+         SELECT COUNT(*) AS occupied
+           FROM bookings
+          WHERE hotel_id = $1
+            AND booking_status = 'confirmed'
+            AND check_in_date <= $2::date
+            AND check_out_date > $2::date
+       )
+       SELECT totals.total_rooms, occ.occupied
+         FROM totals, occ`,
+      [hotelId, startISO]
+    );
+
+    const lowInventory = await db.query(
+      `SELECT r.room_id, r.room_type, r.total_rooms,
+              (r.total_rooms - COALESCE(b.booked, 0)) AS available
+         FROM rooms r
+         LEFT JOIN (
+           SELECT room_id, COUNT(*) AS booked
+             FROM bookings
+            WHERE hotel_id = $1
+              AND booking_status = 'confirmed'
+              AND check_in_date <= $2::date
+              AND check_out_date > $2::date
+            GROUP BY room_id
+         ) b ON b.room_id = r.room_id
+        WHERE r.hotel_id = $1
+        ORDER BY available ASC
+        LIMIT 5`,
+      [hotelId, startISO]
+    );
+
+    const totalRooms = parseInt(occupancy.rows[0]?.total_rooms || 0, 10);
+    const occupiedRooms = parseInt(occupancy.rows[0]?.occupied || 0, 10);
+    const availableRooms = totalRooms - occupiedRooms;
+    const occupancyPct = totalRooms > 0 ? Number(((occupiedRooms / totalRooms) * 100).toFixed(1)) : 0;
+
+    res.json({
+      date: startISO,
+      totals: {
+        revenue_paid: Number(revenue.rows[0]?.revenue_paid || 0),
+        revenue_pay_on_arrival: Number(revenue.rows[0]?.revenue_poa || 0),
+        bookings_new: Number(revenue.rows[0]?.bookings_new || 0),
+        bookings_cancelled: Number(revenue.rows[0]?.bookings_cancelled || 0),
+        occupancy_pct: occupancyPct
+      },
+      rooms: {
+        occupied: occupiedRooms,
+        available: availableRooms,
+        total: totalRooms
+      },
+      alerts: {
+        low_inventory: lowInventory.rows
+      }
+    });
+  } catch (err) {
+    console.error("Daily summary failed:", err.message);
+    res.status(500).json({ message: "Failed to build summary" });
+  }
+});
+
 app.put("/api/staff/hotel", verifyToken, async (req, res) => {
   const hotelId = req.user?.hotel_id;
   if (!hotelId) return res.status(403).json({ message: "Unauthorized" });
@@ -813,6 +913,36 @@ app.put("/api/staff/hotel", verifyToken, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ message: "Server error updating hotel" });
+  }
+});
+
+// ==========================================
+// STAFF: Auto-cancel unpaid arrivals up to today
+// ==========================================
+app.post("/api/staff/cancel-unpaid-arrivals", verifyToken, async (req, res) => {
+  const hotelId = req.user?.hotel_id;
+  if (!hotelId) return res.status(403).json({ message: "Unauthorized" });
+
+  const todayIso = new Date().toISOString().slice(0,10);
+  try {
+    const result = await db.query(
+      `UPDATE bookings
+          SET booking_status = 'cancelled'
+        WHERE hotel_id = $1
+          AND booking_status IN ('confirmed','pending')
+          AND payment_status != 'paid'
+          AND check_in_date <= $2
+        RETURNING booking_id, booking_ref`,
+      [hotelId, todayIso]
+    );
+
+    res.json({
+      message: `Cancelled ${result.rowCount} unpaid arrival(s) through ${todayIso}`,
+      cancelled: result.rows
+    });
+  } catch (err) {
+    console.error("Auto cancel failed:", err.message);
+    res.status(500).json({ message: "Failed to cancel unpaid arrivals" });
   }
 });
 
@@ -1145,25 +1275,41 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
   const period = parseInt(req.query.period) || 30;
   const startParam = req.query.start_date ? new Date(req.query.start_date) : null;
   const endParam = req.query.end_date ? new Date(req.query.end_date) : null;
+  const singleDateParam = req.query.date ? new Date(req.query.date) : null;
 
   try {
     const hotelMeta = await db.query("SELECT hotel_name FROM hotels WHERE hotel_id = $1", [hotel_id]);
     const hotelName = hotelMeta.rows[0]?.hotel_name || null;
 
     const today = new Date();
-    const endDateBase = endParam && !Number.isNaN(endParam) ? endParam : today;
-    endDateBase.setHours(0,0,0,0);
-    const startDate = startParam && !Number.isNaN(startParam) ? new Date(startParam) : new Date(endDateBase);
-    startDate.setHours(0,0,0,0);
-    if (!(startParam && !Number.isNaN(startParam))) {
-      startDate.setDate(startDate.getDate() - period);
+    let endDateBase;
+    let startDate;
+
+    if (singleDateParam && !Number.isNaN(singleDateParam)) {
+      // single-day shortcut: date = YYYY-MM-DD
+      const d = new Date(singleDateParam);
+      d.setHours(0,0,0,0);
+      endDateBase = new Date(d);
+      endDateBase.setDate(endDateBase.getDate() + 1); // exclusive end = next day
+      startDate = new Date(d);
+    } else {
+      endDateBase = endParam && !Number.isNaN(endParam) ? endParam : today;
+      endDateBase.setHours(0,0,0,0);
+      startDate = startParam && !Number.isNaN(startParam) ? new Date(startParam) : new Date(endDateBase);
+      startDate.setHours(0,0,0,0);
+      if (!(startParam && !Number.isNaN(startParam))) {
+        startDate.setDate(startDate.getDate() - period);
+      }
     }
     
     const previousStartDate = new Date(startDate);
     previousStartDate.setDate(previousStartDate.getDate() - period);
 
     const endDateExclusive = new Date(endDateBase);
-    endDateExclusive.setDate(endDateExclusive.getDate() + 1);
+    if (!(singleDateParam && !Number.isNaN(singleDateParam))) {
+      // range/period path: we already moved endDateBase to next day inside single-date branch
+      endDateExclusive.setDate(endDateExclusive.getDate() + 1);
+    }
 
     const startDateStr = startDate.toISOString().slice(0, 10);
     const endDateExclusiveStr = endDateExclusive.toISOString().slice(0, 10);
@@ -1195,8 +1341,13 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     const confirmedCount = parseInt(data.confirmed_bookings) || 0;
 
     const cancelledResult = await db.query(
-      `SELECT COUNT(*) AS cancelled FROM bookings WHERE hotel_id = $1 AND booking_status = 'cancelled' AND created_at >= $2`,
-      [hotel_id, startDateStr]
+      `SELECT COUNT(DISTINCT b.booking_id) AS cancelled
+         FROM bookings b
+         CROSS JOIN LATERAL generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
+        WHERE b.hotel_id = $1
+          AND b.booking_status = 'cancelled'
+          AND stay_date >= $2 AND stay_date < $3`,
+      [hotel_id, startDateStr, endDateExclusiveStr]
     );
     const cancelledCount = parseInt(cancelledResult.rows[0].cancelled) || 0;
     const totalBookings = confirmedCount + cancelledCount;
@@ -1206,7 +1357,8 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
       [hotel_id]
     );
     const totalCapacity = parseInt(totalRoomsResult.rows[0].total_capacity) || 1;
-    const totalAvailableNights = totalCapacity * period;
+    const daysInRange = Math.max(1, Math.round((endDateExclusive - startDate) / (1000 * 60 * 60 * 24)));
+    const totalAvailableNights = totalCapacity * daysInRange;
 
     const occupancyRate = totalAvailableNights > 0 ? ((roomNights / totalAvailableNights) * 100).toFixed(1) : 0;
     const revpar = totalAvailableNights > 0 ? Math.round(totalRevenue / totalAvailableNights) : 0;
@@ -1272,8 +1424,13 @@ app.get("/api/staff/analytics", verifyToken, async (req, res) => {
     const revenueChange = prevRevenue > 0 ? (((totalRevenue - prevRevenue) / prevRevenue) * 100).toFixed(1) : (totalRevenue > 0 ? 100 : 0);
 
     const pm = await db.query(
-      `SELECT payment_status, COUNT(*) AS count FROM bookings
-       WHERE hotel_id = $1 AND created_at >= $2 AND created_at < $3 GROUP BY payment_status`,
+      `SELECT payment_status, COUNT(DISTINCT b.booking_id) AS count
+         FROM bookings b
+         CROSS JOIN LATERAL generate_series(b.check_in_date, b.check_out_date - INTERVAL '1 day', INTERVAL '1 day') AS stay_date
+        WHERE b.hotel_id = $1
+          AND b.booking_status = 'confirmed'
+          AND stay_date >= $2 AND stay_date < $3
+        GROUP BY payment_status`,
       [hotel_id, startDateStr, endDateExclusiveStr]
     );
     const paymentMixMap = pm.rows.reduce((acc, row) => { acc[row.payment_status || "unknown"] = parseInt(row.count) || 0; return acc; }, {});

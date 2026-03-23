@@ -43,6 +43,13 @@ function StaffDashboard() {
   const [useRange, setUseRange] = useState(false);
   const [pricingStartDate, setPricingStartDate] = useState(() => new Date().toISOString().slice(0, 10));
 
+  // Daily summary (new backend endpoint)
+  const [summaryDate, setSummaryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [printDate, setPrintDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [showPrintPicker, setShowPrintPicker] = useState(false);
+  const [dailySummary, setDailySummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
   const presetPeriods = ["7", "30", "90"];
   const isCustomPeriod = !presetPeriods.includes(period);
 
@@ -60,12 +67,17 @@ function StaffDashboard() {
     if (activeTab === "analytics") {
       fetchAnalytics();
       fetchBookings();
+      fetchDailySummary();
       fetchAvailability();
       fetchPricingRecommendations(); // also hydrate insights card while on analytics
     } else if (activeTab === "pricing") {
       fetchPricingRecommendations();
     }
   }, [activeTab, period, pricingStartDate, availFrom, availTo, useRange]);
+
+  useEffect(() => {
+    if (activeTab === "analytics") fetchDailySummary();
+  }, [summaryDate, activeTab]);
 
   useEffect(() => {
     fetchHotelProfile();
@@ -113,12 +125,12 @@ function StaffDashboard() {
   const fetchAnalytics = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("token");
-      const config = { headers: { Authorization: `Bearer ${token}` } };
-      const params = useRange
-        ? `start_date=${availFrom}&end_date=${availTo}`
-        : `period=${period}`;
-      const res = await axios.get(`http://localhost:3000/api/staff/analytics?${params}`, config);
+    const token = localStorage.getItem("token");
+    const config = { headers: { Authorization: `Bearer ${token}` } };
+    const params = useRange
+      ? `start_date=${availFrom}&end_date=${availTo}`
+      : `period=${period}`;
+    const res = await axios.get(`http://localhost:3000/api/staff/analytics?${params}`, config);
       setAnalytics(res.data);
     } catch (err) {
       console.error(err);
@@ -180,6 +192,85 @@ function StaffDashboard() {
       if (err.response?.status === 401) navigate("/staff-login");
     } finally {
       setBookingsLoading(false);
+    }
+  };
+
+  const fetchDailySummary = async (dateOverride) => {
+    setSummaryLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        setSummaryLoading(false);
+        return null;
+      }
+      const dateToUse = dateOverride || summaryDate;
+      const res = await axios.get(`http://localhost:3000/api/staff/daily-summary?date=${dateToUse}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDailySummary(res.data);
+      return res.data;
+    } catch (err) {
+      console.error("Failed to load daily summary", err);
+      if (err.response?.status === 401) navigate("/staff-login");
+      return null;
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const printDailySummary = async () => {
+    const chosen = printDate || summaryDate || new Date().toISOString().slice(0,10);
+
+    let data = dailySummary;
+    if (!data || data.date !== chosen) {
+      data = await fetchDailySummary(chosen);
+    }
+    if (!data) return;
+
+    const { totals = {}, rooms = {}, alerts = {} } = data;
+    const dateDisplay = new Date(chosen).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' });
+
+    const html = `<!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Daily Ops Summary</title>
+      <style>
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 24px; color: #111827; }
+        h1 { margin: 0 0 4px; }
+        h2 { margin: 24px 0 8px; font-size: 18px; }
+        .meta { color: #6b7280; margin-bottom: 18px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+        .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; background: #fff; box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+        .label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #6b7280; margin-bottom: 6px; font-weight: 700; }
+        .value { font-size: 26px; font-weight: 800; color: #111827; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { padding: 8px 6px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
+        th { text-align: left; color: #6b7280; }
+      </style>
+    </head>
+    <body>
+      <h1>Daily Ops Summary</h1>
+      <div class="meta">${dateDisplay}</div>
+      <p style="font-size:14px; color:#374151; line-height:1.5; margin: 8px 0 16px 0;">
+        On ${dateDisplay}, the hotel recorded ₹${Number(totals.revenue_paid||0).toLocaleString()} in paid revenue and ₹${Number(totals.revenue_pay_on_arrival||0).toLocaleString()} expected on arrival. A total of ${Number(totals.bookings_new||0)} bookings were made, with ${Number(totals.bookings_cancelled||0)} cancellations. Occupancy for the night stands at ${Number(totals.occupancy_pct||0)}% (${Number(rooms.occupied||0)} of ${Number(rooms.total||0)} rooms).
+      </p>
+
+      <div class="grid">
+        <div class="card"><div class="label">Paid Revenue</div><div class="value">₹${Number(totals.revenue_paid||0).toLocaleString()}</div></div>
+        <div class="card"><div class="label">Pay on Arrival</div><div class="value">₹${Number(totals.revenue_pay_on_arrival||0).toLocaleString()}</div></div>
+        <div class="card"><div class="label">Bookings</div><div class="value">${Number(totals.bookings_new||0)}</div><div class="meta" style="margin:4px 0 0">${Number(totals.bookings_cancelled||0)} cancelled</div></div>
+        <div class="card"><div class="label">Occupancy</div><div class="value">${Number(totals.occupancy_pct||0)}%</div><div class="meta" style="margin:4px 0 0">${Number(rooms.occupied||0)} of ${Number(rooms.total||0)} rooms</div></div>
+      </div>
+
+      <script>window.onload = () => { window.print(); };</script>
+    </body>
+    </html>`;
+
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
     }
   };
 
@@ -384,6 +475,13 @@ function StaffDashboard() {
           </button>
 
           <button 
+            onClick={() => setShowPrintPicker((v) => !v)} 
+            style={{...defaultNavStyle, backgroundColor: "#2563eb", color: "white", borderColor: "#2563eb"}}
+          >
+            🖨️ Print Summary
+          </button>
+
+          <button 
             onClick={() => { localStorage.removeItem("token"); navigate("/staff-login"); }} 
             style={{...defaultNavStyle, color: "#fca5a5", borderColor: "#fca5a5"}}
           >
@@ -399,6 +497,40 @@ function StaffDashboard() {
             ========================================== */}
         {activeTab === "analytics" && analytics && (
           <div>
+            {showPrintPicker && (
+              <div style={{ marginBottom: "14px", display: "flex", alignItems: "center", gap: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", padding: "10px 14px", borderRadius: "12px", boxShadow: "0 10px 30px rgba(0,0,0,0.25)" }}>
+                <div>
+                  <div style={{ color: "#cbd5e1", fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Print Summary Date</div>
+                  <div style={{ color: "#9ca3af", fontSize: "12px" }}>Choose a date to print/download the daily report.</div>
+                </div>
+                <input
+                  type="date"
+                  value={printDate}
+                  onChange={(e) => setPrintDate(e.target.value)}
+                  style={{
+                    background: "rgba(15,23,42,0.6)",
+                    color: "white",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    borderRadius: "10px",
+                    padding: "8px 10px",
+                    fontSize: "13px"
+                  }}
+                />
+                <button
+                  onClick={() => { setShowPrintPicker(false); printDailySummary(); }}
+                  style={{ padding: "10px 14px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.16)", background: "#2563eb", color: "white", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Print
+                </button>
+                <button
+                  onClick={() => setShowPrintPicker(false)}
+                  style={{ padding: "10px 12px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "#e5e7eb", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "20px", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
               <button
                 onClick={() => setUseRange(!useRange)}
